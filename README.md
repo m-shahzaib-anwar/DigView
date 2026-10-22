@@ -85,6 +85,10 @@ npm run tauri dev
 
 [Usage](docs/USAGE.md) · [Feature scope](docs/FEATURES.md) · [Architecture](docs/ARCHITECTURE.md) · [Validation](docs/VALIDATION.md)
 
+## Roadmap
+
+Planned contributor tasks: **optional Gemma download and local semantic search**, plus **automatic app updates**. These are not available in the current beta. See [TODO.md](TODO.md) for scope and acceptance criteria.
+
 ## Contributing
 
 Contributions are welcome: read [CONTRIBUTING.md](CONTRIBUTING.md), open an issue, or submit a pull request from your fork. Security reports should follow [SECURITY.md](SECURITY.md).
