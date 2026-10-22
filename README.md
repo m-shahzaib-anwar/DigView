@@ -87,7 +87,11 @@ npm run tauri dev
 
 ## Roadmap
 
-Planned contributor tasks: **optional Gemma download and local semantic search**, plus **automatic app updates**. These are not available in the current beta. See [TODO.md](TODO.md) for scope and acceptance criteria.
+- [ ] Optional Gemma download and local semantic search.
+- [ ] Automatic app updates.
+- [ ] macOS and Linux releases.
+
+These are planned contributor tasks, not available in the current beta. See [TODO.md](TODO.md) for scope and acceptance criteria.
 
 ## Contributing
 

@@ -18,3 +18,7 @@ Planned work below is not available in the current beta. Discuss an approach in 
 - [ ] Document the release/signing process and validate real packaged upgrade scenarios on Windows before enabling automatic updates.
 
 Existing update-related source is groundwork; the published beta has automatic updates disabled. Gemma downloads and semantic search are also not included yet.
+
+## Cross-platform releases
+
+- [ ] Add macOS and Linux releases.
