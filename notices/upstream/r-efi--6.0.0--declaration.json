@@ -1,0 +1,8 @@
+{
+  "name": "r-efi",
+  "version": "6.0.0",
+  "license": "MIT OR Apache-2.0 OR LGPL-2.1-or-later",
+  "authors": [],
+  "repository": "https://github.com/r-efi/r-efi",
+  "package_source": "https://static.crates.io/crates/r-efi/r-efi-6.0.0.crate"
+}

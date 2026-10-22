@@ -1,0 +1,65 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "DigView",
+  "version": "0.1.0",
+  "identifier": "app.digview.desktop",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "DigView",
+        "visible": false,
+        "width": 1360,
+        "height": 900,
+        "minWidth": 920,
+        "minHeight": 640,
+        "backgroundColor": "#f7f8fa"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' data: blob:; font-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; connect-src 'self' ipc: http://ipc.localhost digview-preview: http://digview-preview.localhost https://digview-preview.localhost https://us.i.posthog.com https://eu.i.posthog.com https://*.ingest.sentry.io https://*.ingest.us.sentry.io https://*.ingest.de.sentry.io; media-src 'self' digview-preview: http://digview-preview.localhost https://digview-preview.localhost; object-src 'none'; frame-src 'none'; base-uri 'self'"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "",
+      "requireSignedVersion": true,
+      "allowDowngrades": false,
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  },
+  "bundle": {
+    "license": "MIT",
+    "active": true,
+    "targets": "all",
+    "resources": ["THIRD_PARTY_NOTICES.txt"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "shortDescription": "A private home for your files",
+    "category": "Utility",
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "displayLanguageSelector": false,
+        "languages": ["English"],
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico",
+        "headerImage": "installer/header.bmp",
+        "sidebarImage": "installer/sidebar.bmp",
+        "startMenuFolder": "DigView"
+      }
+    }
+  }
+}

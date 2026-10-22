@@ -1,0 +1,10 @@
+{
+  "name": "type1-encoding-parser",
+  "version": "0.1.1",
+  "license": "MIT",
+  "authors": [
+    "Jeff Muizelaar <jmuizelaar@mozilla.com>"
+  ],
+  "repository": "https://github.com/jrmuizel/type1-encoding-parser",
+  "package_source": "https://static.crates.io/crates/type1-encoding-parser/type1-encoding-parser-0.1.1.crate"
+}

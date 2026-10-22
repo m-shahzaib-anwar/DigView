@@ -1,0 +1,10 @@
+{
+  "name": "pdf-extract",
+  "version": "0.12.1",
+  "license": "MIT",
+  "authors": [
+    "Jeff Muizelaar <jmuizelaar@mozilla.com>"
+  ],
+  "repository": "https://github.com/jrmuizel/pdf-extract",
+  "package_source": "https://static.crates.io/crates/pdf-extract/pdf-extract-0.12.1.crate"
+}

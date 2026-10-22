@@ -1,0 +1,48 @@
+{
+  "measured_at": "2026-10-18T13:42:55.886Z",
+  "platform": "win32",
+  "cpu": "Intel(R) Core(TM) i5-10210U CPU @ 1.60GHz",
+  "logical_cpus": 8,
+  "memory_gb": 16,
+  "cache": "warm SQLite, temporary disk database",
+  "insert_ms": 61879.3285,
+  "profile": "debug",
+  "queries": [
+    {
+      "median_ms": 1.5231000000000001,
+      "p95_ms": 2.2668,
+      "query": "recent"
+    },
+    {
+      "median_ms": 1.8843,
+      "p95_ms": 2.594,
+      "query": "category"
+    },
+    {
+      "median_ms": 5.2995,
+      "p95_ms": 10.0292,
+      "query": "filename"
+    },
+    {
+      "median_ms": 1.4212,
+      "p95_ms": 2.4055999999999997,
+      "query": "size"
+    },
+    {
+      "median_ms": 1.3649,
+      "p95_ms": 1.7749000000000001,
+      "query": "name"
+    },
+    {
+      "median_ms": 1.2706,
+      "p95_ms": 1.821,
+      "query": "root"
+    },
+    {
+      "median_ms": 1.3172,
+      "p95_ms": 2.144,
+      "query": "source"
+    }
+  ],
+  "records": 100000
+}

@@ -1,0 +1,33 @@
+{
+  "measured_at": "2026-10-18T13:33:28.419Z",
+  "platform": "win32",
+  "cpu": "Intel(R) Core(TM) i5-10210U CPU @ 1.60GHz",
+  "logical_cpus": 8,
+  "memory_gb": 16,
+  "cache": "warm SQLite, temporary disk database",
+  "insert_ms": 93101.72529999999,
+  "profile": "debug",
+  "queries": [
+    {
+      "median_ms": 111.1317,
+      "p95_ms": 159.55069999999998,
+      "query": "recent"
+    },
+    {
+      "median_ms": 257.26660000000004,
+      "p95_ms": 431.45869999999996,
+      "query": "category"
+    },
+    {
+      "median_ms": 8.2001,
+      "p95_ms": 16.0791,
+      "query": "filename"
+    },
+    {
+      "median_ms": 85.8626,
+      "p95_ms": 131.751,
+      "query": "size"
+    }
+  ],
+  "records": 100000
+}

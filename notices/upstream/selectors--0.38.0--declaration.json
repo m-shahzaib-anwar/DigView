@@ -1,0 +1,10 @@
+{
+  "name": "selectors",
+  "version": "0.38.0",
+  "license": "MPL-2.0",
+  "authors": [
+    "The Servo Project Developers"
+  ],
+  "repository": "https://github.com/servo/stylo",
+  "package_source": "https://static.crates.io/crates/selectors/selectors-0.38.0.crate"
+}

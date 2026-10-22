@@ -1,0 +1,7 @@
+{
+  "bundle": {
+    "useLocalToolsDir": true,
+    "createUpdaterArtifacts": false,
+    "windows": { "nsis": { "installMode": "currentUser" } }
+  }
+}

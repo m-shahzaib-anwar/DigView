@@ -1,0 +1,10 @@
+{
+  "name": "adobe-cmap-parser",
+  "version": "0.4.1",
+  "license": "MIT",
+  "authors": [
+    "Jeff Muizelaar <jmuizelaar@mozilla.com>"
+  ],
+  "repository": "https://github.com/jrmuizel/adobe-cmap-parser",
+  "package_source": "https://static.crates.io/crates/adobe-cmap-parser/adobe-cmap-parser-0.4.1.crate"
+}

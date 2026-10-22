@@ -1,0 +1,13 @@
+{
+  "bundle": {
+    "createUpdaterArtifacts": true,
+    "windows": { "nsis": { "installMode": "currentUser" } }
+  },
+  "plugins": {
+    "updater": {
+      "requireSignedVersion": true,
+      "allowDowngrades": false,
+      "windows": { "installMode": "passive" }
+    }
+  }
+}

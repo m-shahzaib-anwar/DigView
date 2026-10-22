@@ -1,0 +1,6 @@
+Unresolved missing-license-text packages:
+None.
+
+47 exact-version supplemental reviews applied; provenance in notices/upstream-review.json.
+License declarations with standard terms are distinguished from verbatim upstream notices.
+Source availability: notices/MPL-SOURCES.txt. This is notice completeness, not legal clearance.

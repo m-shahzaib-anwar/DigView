@@ -1,0 +1,11 @@
+{
+  "name": "tr46",
+  "version": "0.0.3",
+  "license": "MIT",
+  "authors": {
+    "name": "Sebastian Mayr",
+    "email": "npm@smayr.name"
+  },
+  "repository": "https://github.com/Sebmaster/tr46.js",
+  "package_source": "https://registry.npmjs.org/tr46/-/tr46-0.0.3.tgz"
+}

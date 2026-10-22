@@ -1,0 +1,47 @@
+{
+  "name": "digview",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "postinstall": "node scripts/prepare-ocr.mjs && node scripts/prepare-pdf.mjs",
+    "predev": "node scripts/prepare-ocr.mjs && node scripts/prepare-pdf.mjs",
+    "prebuild": "node scripts/prepare-ocr.mjs && node scripts/prepare-pdf.mjs",
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc -b && vite build",
+    "build:windows": "node scripts/build-windows.mjs",
+    "preview": "vite preview --host 127.0.0.1",
+    "tauri": "node scripts/tauri.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "native:test": "node scripts/native.mjs test --manifest-path native-core/Cargo.toml --lib",
+    "native:check": "node scripts/native.mjs check --manifest-path src-tauri/Cargo.toml",
+    "native:integration": "node scripts/native.mjs test --manifest-path native-core/Cargo.toml trash_integration -- --ignored --nocapture",
+    "native:video": "node scripts/native.mjs test --manifest-path native-core/Cargo.toml --lib windows_extracts_a_real_video_frame_with_correct_color_and_bounds -- --ignored --nocapture",
+    "format": "prettier --write src scripts docs *.json *.md",
+    "benchmark": "node scripts/benchmark.mjs"
+  },
+  "dependencies": {
+    "@tanstack/react-virtual": "^3.13.0",
+    "@tauri-apps/api": "^2.10.0",
+    "@tauri-apps/plugin-clipboard-manager": "2.2.1",
+    "@tesseract.js-data/eng": "^1.0.0",
+    "lucide-react": "^0.468.0",
+    "pdfjs-dist": "6.4.299",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "tesseract.js": "^6.0.1"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.10.0",
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.7.0",
+    "prettier": "^3.9.10",
+    "typescript": "~5.7.3",
+    "vite": "^6.4.0",
+    "vitest": "5.0.5"
+  }
+}

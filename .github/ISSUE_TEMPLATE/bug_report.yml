@@ -1,0 +1,32 @@
+name: Bug report
+description: Report a reproducible DigView problem
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: Use generated files and app-only screenshots. Do not include private documents, credentials or a personal library database. Report security vulnerabilities privately through the Security tab.
+  - type: input
+    id: environment
+    attributes:
+      label: DigView version and operating system
+      placeholder: "0.1.0 beta, Windows 11"
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior and optional app-only screenshots
+    validations:
+      required: true

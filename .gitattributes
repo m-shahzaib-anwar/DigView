@@ -1,0 +1,10 @@
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.ico binary
+*.icns binary
+*.bmp binary
+# Preserve collected upstream notice formatting without whitespace lint noise.
+**/THIRD_PARTY_NOTICES.txt -whitespace
+# Keep reviewed upstream evidence byte-for-byte for checksum verification.
+notices/upstream/** -whitespace

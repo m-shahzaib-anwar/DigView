@@ -1,0 +1,9 @@
+title = "DigView secret audit"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Reviewed non-secret storage key and synthetic PostHog test token only"
+regexTarget = "secret"
+regexes = ['^digview-observability-v1$', '^phc_fixture1234$']

@@ -1,0 +1,32 @@
+.add-folders-dialog {
+  min-width: 0;
+}
+.add-folders-intro {
+  color: var(--muted);
+  line-height: 1.6;
+  margin: 0 0 20px;
+}
+.add-folders-dialog .setup-preview {
+  margin: 0 0 16px;
+  border-radius: 8px;
+}
+.add-folders-dialog .setup-note {
+  margin-bottom: 16px;
+}
+.add-folders-dialog .setup-note ul {
+  margin: 8px 0;
+  padding-left: 18px;
+}
+.add-folders-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 24px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+.add-folders-dialog [role="status"] {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
