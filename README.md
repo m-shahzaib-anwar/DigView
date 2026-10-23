@@ -87,7 +87,7 @@ npm run tauri dev
 
 ## Roadmap
 
-- [ ] Optional Gemma download and local semantic search.
+- [ ] Gemma integration is under development (optional download and local semantic search).
 - [ ] Automatic app updates.
 - [ ] macOS and Linux releases.
 
