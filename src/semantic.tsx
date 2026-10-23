@@ -1,3 +1,4 @@
+import { latestSearchQueue } from "./search-queue";
 import { taskPercent } from "./semantic-progress";
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -32,23 +33,17 @@ export interface SemanticResult {
   semantic: boolean;
   message: string;
 }
-// Coalesce queued typing changes so the most recent query runs after the current worker.
-let sequence = 0;
-let searchTail: Promise<void> = Promise.resolve();
+const searchQueue = latestSearchQueue();
+export function invalidateSemanticQuery() {
+  searchQueue.invalidate();
+}
 export function semanticQuery(
   query: Query,
   broader = false,
 ): Promise<SemanticResult> {
-  const ticket = ++sequence;
-  const request = searchTail.then(() => {
-    if (ticket !== sequence) throw new Error("Superseded semantic query");
-    return invoke<SemanticResult>("semantic_query", { query, broader });
-  });
-  searchTail = request.then(
-    () => undefined,
-    () => undefined,
+  return searchQueue.run(() =>
+    invoke<SemanticResult>("semantic_query", { query, broader }),
   );
-  return request;
 }
 const mib = (n: number) => `${Math.ceil(n / 1024 / 1024)} MiB`;
 
@@ -222,6 +217,11 @@ export function SemanticSettings({
           Use the normal search bar. Exact matches stay available while AI
           prepares files or is paused. Related results may not be relevant; open
           the document to check.
+        </p>
+        <p>
+          Common Urdu and Roman Urdu search words have local keyword assistance.
+          Unfamiliar wording may work better in English. This is not full
+          translation.
         </p>
         <p>
           Progress and current tasks appear in Activity at the bottom. Pause

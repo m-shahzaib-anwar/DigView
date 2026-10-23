@@ -1,4 +1,9 @@
-import { SemanticSettings, semanticQuery, ActivityBar } from "./semantic";
+import {
+  SemanticSettings,
+  semanticQuery,
+  invalidateSemanticQuery,
+  ActivityBar,
+} from "./semantic";
 import { Modal } from "./modal";
 import { AddFoldersDialog } from "./add-folders-dialog";
 import { setupService } from "./setup-service";
@@ -236,6 +241,7 @@ function App() {
   const [groups, setGroups] = useState<DuplicateGroup[]>([]);
   const [revision, setRevision] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [queryLoading, setQueryLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [job, setJob] = useState<Job | null>(null);
   const [toast, setToast] = useState<{ text: string; error: boolean } | null>(
@@ -404,22 +410,26 @@ function App() {
   }, [debounced, view, sort, rootId, source, cleanup, favourites, meaning]);
   useEffect(() => {
     if (!boot || !isLibrary) return;
+    if (search !== debounced) {
+      invalidateSemanticQuery();
+      setMeaningNotice("");
+      setQueryLoading(true);
+      return;
+    }
     const epoch = ++queryEpoch.current;
-    setLoading(true);
+    setQueryLoading(true);
     setMeaningNotice(
       meaning && debounced ? "Searching indexed text by meaning…" : "",
     );
     const request =
       meaning && debounced && desktop
         ? semanticQuery(query, broader)
-        : api
-            .query(query)
-            .then((result) => ({
-              result,
-              matches: undefined,
-              semantic: false,
-              message: "",
-            }));
+        : api.query(query).then((result) => ({
+            result,
+            matches: undefined,
+            semantic: false,
+            message: "",
+          }));
     request
       .then((data) => {
         if (epoch === queryEpoch.current) {
@@ -435,15 +445,31 @@ function App() {
         }
       })
       .catch((error) => {
-        if (epoch === queryEpoch.current) notify(errorText(error), true);
+        if (epoch === queryEpoch.current) {
+          setResult(initialResult);
+          setSemanticResults(false);
+          setMeaningNotice("");
+          notify(errorText(error), true);
+        }
       })
       .finally(() => {
-        if (epoch === queryEpoch.current) setLoading(false);
+        if (epoch === queryEpoch.current) setQueryLoading(false);
       });
     return () => {
       queryEpoch.current++;
     };
-  }, [query, revision, !!boot, isLibrary, notify, meaning, debounced, broader]);
+  }, [
+    query,
+    revision,
+    !!boot,
+    isLibrary,
+    notify,
+    meaning,
+    search,
+    debounced,
+    broader,
+  ]);
+  const searchPending = search !== debounced || (!!debounced && queryLoading);
   useEffect(() => {
     if (view !== "duplicates") return;
     let alive = true;
@@ -958,10 +984,16 @@ function App() {
                     <div>
                       <h1>{title}</h1>
                       <p>
-                        {result.total.toLocaleString()} files{" "}
-                        <span className="middle-dot">·</span>{" "}
-                        {formatBytes(result.bytes)}
-                        {debounced && semanticResults && (
+                        {searchPending
+                          ? "Searching…"
+                          : `${result.total.toLocaleString()} files`}{" "}
+                        {!searchPending && (
+                          <>
+                            <span className="middle-dot">·</span>{" "}
+                            {formatBytes(result.bytes)}
+                          </>
+                        )}
+                        {!searchPending && debounced && semanticResults && (
                           <button
                             className="text-button related-results-control"
                             onClick={() => {
@@ -1132,10 +1164,15 @@ function App() {
                     </div>
                   </div>
                 </div>
-                {loading && result.files.length === 0 ? (
+                {searchPending ||
+                ((loading || queryLoading) && result.files.length === 0) ? (
                   <div className="loading-state">
                     <Loader2 size={25} className="spinning" />
-                    <p>Bringing your library into view…</p>
+                    <p>
+                      {searchPending
+                        ? "Searching your library…"
+                        : "Bringing your library into view…"}
+                    </p>
                   </div>
                 ) : result.files.length === 0 ? (
                   <Empty
@@ -1191,7 +1228,7 @@ function App() {
                         <div>
                           <button
                             className="button small-button"
-                            disabled={offset === 0 || loading}
+                            disabled={offset === 0 || loading || queryLoading}
                             onClick={() =>
                               setOffset((n) => Math.max(0, n - 120))
                             }
@@ -1200,7 +1237,11 @@ function App() {
                           </button>
                           <button
                             className="button small-button"
-                            disabled={offset + 120 >= result.total || loading}
+                            disabled={
+                              offset + 120 >= result.total ||
+                              loading ||
+                              queryLoading
+                            }
                             onClick={() => setOffset((n) => n + 120)}
                           >
                             Next <ArrowRight size={14} />

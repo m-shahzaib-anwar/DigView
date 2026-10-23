@@ -2874,7 +2874,7 @@ kbd {
 .semantic-search-notice {
   padding: 8px 24px;
   font-size: 12px;
-  border-bottom: 1px solid var(--border, #d8dbe2);
+  border-bottom: 1px solid var(--line);
 }
 .setup-content .semantic-settings {
   margin-top: 16px;
@@ -3022,4 +3022,28 @@ button.match-snippet {
   padding: 10px 14px;
   margin: 0;
   border-bottom: 1px solid var(--line);
+}
+
+/* Keep the source summary above the PDF, within the fixed preview stage. */
+.matched-pdf-preview {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+.matched-pdf-preview > .matched-passage-summary {
+  flex: 0 0 auto;
+  max-height: 96px;
+  overflow: auto;
+  overflow-wrap: anywhere;
+}
+.matched-pdf-preview > .pdf-preview,
+.matched-pdf-preview > .inline-preview-message {
+  flex: 1;
+  width: 100%;
+  height: auto;
+  min-width: 0;
+  min-height: 0;
 }

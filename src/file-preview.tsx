@@ -159,10 +159,12 @@ export function FilePreview({
   const url = api.previewUrl(info.token!);
   if (info.kind === "pdf")
     return (
-      <>
-        <p className="matched-passage-summary">{match?.snippet}</p>
+      <div className="matched-pdf-preview">
+        {match?.snippet && (
+          <p className="matched-passage-summary">{match.snippet}</p>
+        )}
         <PdfPreview url={url} passage={match?.passage} />
-      </>
+      </div>
     );
   const mediaError = () => {
     if (!active.current) return;

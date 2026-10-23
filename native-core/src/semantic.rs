@@ -110,7 +110,22 @@ fn index_document(e: &Engine,id: i64,cancel: &AtomicBool,embed: &mut impl FnMut(
 pub struct MatchPassage {pub snippet:String,pub passage:String,pub digest:String,pub start:usize,pub end:usize}
 #[derive(serde::Serialize)]
 pub struct MatchedResults {pub result:QueryResult,pub matches:HashMap<i64,MatchPassage>}
-pub const EXPANDED_RELEVANCE:f32=0.55;
+// Expanded candidates need a credible leading match and remain close to it.
+pub const EXPANDED_RELEVANCE:f32=0.62;
+fn additional_candidates(ranked:&[(i64,f32)],broader:bool)->std::collections::HashSet<i64> {
+    let mut selected=std::collections::HashSet::new();
+    let Some(&(first,top))=ranked.first() else {return selected;};
+    if !top.is_finite() {return selected;}
+    let runner=ranked.get(1).map(|x|x.1).unwrap_or(0.0);
+    let separated=top>=0.63 && top-runner>=0.03;
+    if !relevant(top) && separated {selected.insert(first);}
+    if broader && (relevant(top) || separated) {
+        for &(id,score) in ranked.iter().take(20) {
+            if score.is_finite() && score>=EXPANDED_RELEVANCE && score>=top-0.06 {selected.insert(id);}
+        }
+    }
+    selected
+}
 pub fn chunk_range(text:&str,chunk:usize)->Option<(usize,usize)> {
     if chunk>=64 || text.is_empty(){return None;}
     let mut start=0;
@@ -122,6 +137,61 @@ pub fn chunk_range(text:&str,chunk:usize)->Option<(usize,usize)> {
         while !text.is_char_boundary(start){start+=1;}
     }
     None
+}
+// Explain the winning chunk near actual query words rather than an unrelated page tail.
+// Passage bytes/offsets remain unchanged for digest validation and PDF navigation.
+fn source_snippet(passage:&str,terms:&[String])->String {
+    let joined=terms.iter().filter(|t|!t.starts_with("ext:")).take(80).map(|t|bounded_text(t,1200)).collect::<Vec<_>>().join(" ");
+    let original=bounded_text(&joined,1200);
+    let assisted=crate::query_language::assist(original);
+    let query=format!("{} {}",original,assisted.unwrap_or_default());
+    let keywords=query.split(|c:char|!c.is_alphanumeric()).map(str::to_lowercase)
+        .filter(|word|word.chars().count()>=3 && !matches!(word.as_str(),"the"|"and"|"for"|"from"|"with"|"that"|"this"|"what"|"how"|"can"|"are"|"was"|"were"|"will"|"would"|"could"|"should"|"while"|"into"|"their"|"your"|"before"|"after"))
+        .collect::<std::collections::HashSet<_>>();
+    let words=passage.split_whitespace().collect::<Vec<_>>();
+    let matches=words.iter().map(|word| {
+        let token=word.trim_matches(|c:char|!c.is_alphanumeric()).to_lowercase();
+        if keywords.contains(&token) {Some(token)} else {None}
+    }).collect::<Vec<_>>();
+    let mut best_start=0;let mut best_score=0;
+    for (index,hit) in matches.iter().enumerate() {
+        if hit.is_none() {continue;}
+        let mut start=index.saturating_sub(6);
+        if let Some(boundary)=(start..index).rev().find(|at|words[*at].chars().last().is_some_and(|c|matches!(c,'.'|'!'|'?'|'。'|'؟'))) {start=boundary+1;}
+        let mut length=0;let mut seen=std::collections::HashSet::new();
+        for at in start..words.len() {
+            let next=words[at].chars().count()+usize::from(length>0);
+            if length+next>316 {break;}
+            length+=next;
+            if let Some(word)=&matches[at] {seen.insert(word);}
+        }
+        let score=seen.iter().map(|word|word.chars().count()).sum::<usize>();
+        if score>best_score {best_score=score;best_start=start;}
+    }
+    let mut snippet=String::new();
+    if best_start>0 {snippet.push_str("… ");}
+    for word in words.iter().skip(best_start) {
+        let count=snippet.chars().count();
+        let separator=usize::from(!snippet.is_empty() && !snippet.ends_with(' '));
+        let available=319usize.saturating_sub(count+separator);
+        if available==0 {break;}
+        if separator>0 {snippet.push(' ');}
+        snippet.extend(word.chars().take(available));
+        if word.chars().count()>available {snippet.push('…');break;}
+    }
+    snippet
+}
+// Unicode case folding can expand a character (for example İ -> i + combining dot).
+// Return an offset into the original source, never an offset into the folded copy.
+fn source_match_offset(text:&str,term:&str)->Option<usize> {
+    let mut folded=String::new();let mut offsets=Vec::new();
+    for (at,ch) in text.char_indices() {
+        for lower in ch.to_lowercase() {
+            folded.push(lower);offsets.extend(std::iter::repeat_n(at,lower.len_utf8()));
+        }
+    }
+    let needle=term.to_lowercase();if needle.is_empty(){return None;}
+    folded.find(&needle).and_then(|at|offsets.get(at).copied())
 }
 pub fn matched_text(e:&Engine,id:i64,digest:&str)->Result<String>{
     if digest.len()!=64 || !digest.bytes().all(|c|c.is_ascii_hexdigit()){return Err("Invalid passage identity.".into());}
@@ -158,12 +228,31 @@ pub fn search_matches(e: &Engine,q: Query,query_vector: Vec<f32>,cancel: &Atomic
             if score.is_finite() && scores.get(&id).is_none_or(|current|score>*current) {scores.insert(id,score);best_chunks.insert(id,(chunk,digest));}
         }
     }
-    for (id,score) in scores {
+    {
+        let mut insert=c.prepare("INSERT INTO semantic_candidates VALUES(?,?)").map_err(|e|e.to_string())?;
+        for (&id,&score) in &scores {
+            cancelled(cancel)?;
+            // Include runner-up scores without filesystem I/O for every weak match.
+            if score>=0.55 {insert.execute(params![id,score]).map_err(|e|e.to_string())?;}
+        }
+    }
+    // Evaluate the leading band within the user's filters, before final counts/pagination.
+    let mut scope=q.clone();scope.offset=0;scope.limit=20;
+    let scoped=db::query_ranked(&c,scope,true)?;
+    let mut ranked=Vec::new();
+    for file in &scoped.files {
         cancelled(cancel)?;
-        if !(if broader {score.is_finite() && score>=EXPANDED_RELEVANCE} else {relevant(score)}) {continue;}
-        // Revalidate selection, current exclusion policy, containment and filesystem identity.
-        if e.checked_file(id).is_ok_and(|(r,p)|check_identity(&r,&p).is_ok()) {
-            c.execute("INSERT INTO semantic_candidates VALUES(?,?)",params![id,score]).map_err(|e|e.to_string())?;
+        if e.checked_file(file.id).is_ok_and(|(r,p)|check_identity(&r,&p).is_ok()) {
+            if let Some(score)=scores.get(&file.id) {ranked.push((file.id,*score));}
+        }
+    }
+    let additional=additional_candidates(&ranked,broader);
+    for (&id,&score) in &scores {
+        cancelled(cancel)?;
+        // Revalidate only candidates that can survive the relevance policy.
+        let keep=(relevant(score) || additional.contains(&id)) && e.checked_file(id).is_ok_and(|(r,p)|check_identity(&r,&p).is_ok());
+        if !keep {
+            c.execute("DELETE FROM semantic_candidates WHERE file_id=?",[id]).map_err(|e|e.to_string())?;
         }
     }
     // Preserve exact name/content matches, including non-text files, above meaning matches.
@@ -195,17 +284,16 @@ pub fn search_matches(e: &Engine,q: Query,query_vector: Vec<f32>,cancel: &Atomic
         let mut range=best_chunks.get(&file.id).and_then(|(chunk,_)|chunk_range(&text,*chunk));
         // Exact text matches take their own passage; filename-only hits need no invented explanation.
         if range.is_none() || exact_ids.contains(&file.id) {
-        let lower=text.to_lowercase();
         let mut anchors=terms.iter().filter(|t|!t.starts_with("ext:") && t.chars().count()>=3).collect::<Vec<_>>();
         anchors.sort_by_key(|t|std::cmp::Reverse(t.len()));
-        if let Some(at)=anchors.iter().filter_map(|term|lower.find(&term.to_lowercase())).find(|at|text.is_char_boundary(*at)) {
+        if let Some(at)=anchors.iter().find_map(|term|source_match_offset(&text,term)) {
             let mut start=at.saturating_sub(100);while !text.is_char_boundary(start){start+=1;}
             range=Some((start,start+bounded_text(&text[start..],1200).len()));
         }
         }
         let Some((start,end))=range else {continue;};
         let passage=text[start..end].to_string();
-        let snippet=passage.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(320).collect();
+        let snippet=source_snippet(&passage,&terms);
         matches.insert(file.id,MatchPassage{snippet,passage,digest,start,end});
     }
     Ok(MatchedResults{result,matches})
@@ -276,6 +364,19 @@ mod tests {
     }
 
     #[test]
+    fn expanded_band_requires_an_anchor_and_never_fills_a_flat_score_list() {
+        assert!(additional_candidates(&[(1,0.6447),(2,0.6359),(3,0.6344)],true).is_empty());
+        assert!(additional_candidates(&[(1,0.603),(2,0.5931)],true).is_empty());
+        assert_eq!(additional_candidates(&[(1,0.6439),(2,0.6046)],false),std::collections::HashSet::from([1]));
+        assert_eq!(additional_candidates(&[(1,0.7197),(2,0.6499),(3,0.6151)],true),std::collections::HashSet::from([1]));
+        assert_eq!(additional_candidates(&[(1,0.7),(2,0.65),(3,0.63)],true),std::collections::HashSet::from([1,2]));
+        let crowded=(0..50).map(|i|(i,0.65)).collect::<Vec<_>>();
+        assert!(additional_candidates(&crowded,true).is_empty());
+        let crowded=(0..50).map(|i|(i,if i==0 {0.68} else {0.65})).collect::<Vec<_>>();
+        assert_eq!(additional_candidates(&crowded,true).len(),20);
+        assert!(additional_candidates(&[(1,f32::NAN)],true).is_empty());
+    }
+    #[test]
     fn relevance_floor_is_inclusive_and_rejects_invalid_scores() {
         assert!(relevant(MIN_RELEVANCE));
         assert!(!relevant(MIN_RELEVANCE-0.00001));
@@ -295,6 +396,27 @@ mod tests {
         }
         let kept=cases[0]["scores"].as_array().unwrap().iter().filter(|r|relevant(r[1].as_f64().unwrap() as f32)).map(|r|r[0].as_str().unwrap()).collect::<Vec<_>>();
         assert_eq!(kept,vec!["record-014.pdf","entry-023.md"]);
+    }
+    #[test]
+    fn measured_language_assistance_and_broader_policy_preserve_topics_without_negative_floods() {
+        let fixture:serde_json::Value=serde_json::from_str(include_str!("fixtures/embeddinggemma2-language-relevance.json")).unwrap();
+        for case in fixture["cases"].as_array().unwrap() {
+            let query=case["query"].as_str().unwrap();
+            let assisted=crate::query_language::assist(query);
+            assert_eq!(assisted.as_deref().unwrap_or(query),case["embedding_query"].as_str().unwrap(),"measured prompt drift: {query}");
+            let fallback=assisted.is_none() && crate::query_language::urdu_wording(query);
+            assert_eq!(fallback,case["fallback_only"].as_bool().unwrap());
+            let scores=case["scores"].as_array().unwrap();
+            let ranked=scores.iter().enumerate().map(|(i,row)|(i as i64,row[1].as_f64().unwrap() as f32)).collect::<Vec<_>>();
+            for broader in [false,true] {
+                let extra=additional_candidates(&ranked,broader);
+                let kept=scores.iter().enumerate().filter(|(i,row)|!fallback && (relevant(row[1].as_f64().unwrap() as f32)||extra.contains(&(*i as i64)))).map(|(_,row)|row[0].as_str().unwrap()).collect::<Vec<_>>();
+                let targets=case["targets"].as_array().unwrap();
+                if targets.is_empty() {assert!(kept.is_empty(),"negative leaked: {query}, broader={broader}");}
+                else {assert!(targets.iter().any(|t|kept.contains(&t.as_str().unwrap())),"lost topic: {query}, broader={broader}");}
+                if query.contains("kiraye") || query.contains("کرائے") {assert_eq!(kept,vec!["note-042.docx"]);}
+            }
+        }
     }
     #[test]
     fn relevance_filters_counts_before_pagination_but_keeps_low_score_exact_matches() {
@@ -323,7 +445,7 @@ mod tests {
     fn broader_results_are_explicit_and_preserve_filters_and_pagination() {
         let (_t,e,_)=fixture();let cancel=AtomicBool::new(false);index(&e,&cancel,|_|Ok(vector()),|_|{}).unwrap();
         let c=db::connect(&e.0.db).unwrap();
-        for (name,score) in [("first.txt",0.7f32),("second.txt",0.6f32)] {
+        for (name,score) in [("first.txt",0.7f32),("second.txt",0.64f32)] {
             let mut v=vec![0f32;DIM];v[0]=score;v[1]=(1.-score*score).sqrt();let bytes=v.iter().flat_map(|x|x.to_le_bytes()).collect::<Vec<_>>();
             c.execute("UPDATE semantic_chunks SET vector=? WHERE file_id=(SELECT id FROM files WHERE name=?)",params![bytes,name]).unwrap();
         }
@@ -332,6 +454,26 @@ mod tests {
         let broad=search_matches(&e,q(),vector(),&cancel,true).unwrap();assert_eq!(broad.result.total,2);assert_eq!(broad.result.files.len(),1);assert_eq!(broad.matches.len(),1);
         let mut next=q();next.offset=1;assert_eq!(search_matches(&e,next,vector(),&cancel,true).unwrap().result.files[0].name,"second.txt");
         let mut filtered=q();filtered.category=Some("images".into());assert_eq!(search_matches(&e,filtered,vector(),&cancel,true).unwrap().result.total,0);
+    }
+    #[test]
+    fn separated_low_score_is_evaluated_within_filters_and_keeps_exact_hits() {
+        let (_t,e,_)=fixture();let cancel=AtomicBool::new(false);index(&e,&cancel,|_|Ok(vector()),|_|{}).unwrap();
+        let c=db::connect(&e.0.db).unwrap();
+        for (name,score) in [("first.txt",0.6439f32),("second.txt",0.635f32)] {
+            let mut v=vec![0f32;DIM];v[0]=score;v[1]=(1.-score*score).sqrt();
+            c.execute("UPDATE semantic_chunks SET vector=? WHERE file_id=(SELECT id FROM files WHERE name=?)",params![v.iter().flat_map(|x|x.to_le_bytes()).collect::<Vec<_>>(),name]).unwrap();
+        }
+        let q=||Query{terms:vec!["unmatched phrase".into()],limit:200,..Default::default()};
+        assert_eq!(search_matches(&e,q(),vector(),&cancel,false).unwrap().result.total,0);
+        assert_eq!(search_matches(&e,q(),vector(),&cancel,true).unwrap().result.total,0);
+        // first.txt is shorter; removing second.txt from the query scope creates a distinct lead.
+        let mut filtered=q();filtered.max_size=Some(14);
+        let found=search_matches(&e,filtered.clone(),vector(),&cancel,false).unwrap();
+        assert_eq!(found.result.total,1);assert_eq!(found.result.files[0].name,"first.txt");
+        filtered.offset=1;let next=search_matches(&e,filtered,vector(),&cancel,false).unwrap();
+        assert_eq!(next.result.total,1);assert!(next.result.files.is_empty());
+        let mut exact=q();exact.terms=vec!["second".into()];
+        let found=search_matches(&e,exact,vector(),&cancel,true).unwrap();assert_eq!(found.result.total,1);assert_eq!(found.result.files[0].name,"second.txt");
     }
     #[test]
     fn matched_passage_tracks_the_best_chunk_and_rejects_changed_or_removed_sources() {
@@ -345,6 +487,32 @@ mod tests {
         assert_eq!(matched_text(&e,file.id,&m.digest).unwrap(),content);
         fs::write(root.join("first.txt"),"different source").unwrap();assert!(matched_text(&e,file.id,&m.digest).is_err());
         e.remove_root(file.root_id).unwrap();assert!(matched_text(&e,file.id,&m.digest).is_err());
+    }
+    #[test]
+    fn source_casefold_offsets_refer_to_original_unicode_bytes() {
+        let text="İstanbul source follows after İ. Refund policy.";
+        let at=source_match_offset(text,"REFUND").unwrap();
+        assert_eq!(&text[at..],"Refund policy.");assert!(text.is_char_boundary(at));
+        assert_eq!(source_match_offset("😀İ café","CAFÉ"),Some("😀İ ".len()));
+        assert_eq!(source_match_offset(text,"unmatched"),None);
+        assert_eq!(source_match_offset(text,""),None);
+    }
+    #[test]
+    fn snippet_prefers_query_context_after_an_unrelated_page_tail() {
+        let passage=format!("{}\nCeramic kiln cooldown. This pottery studio procedure prevents cracking as the kiln cools. {}","Bicycle workshop wheels and tires. ".repeat(18),"Leave the kiln closed during cooldown. ".repeat(9));
+        let snippet=source_snippet(&passage,&["preventing pottery from cracking while a kiln cools".into()]);
+        assert!(snippet.contains("pottery"));assert!(snippet.contains("cracking"));assert!(!snippet.starts_with("Bicycle"));assert!(snippet.chars().count()<=320);
+        // The source passage is not rewritten or narrowed just to make the snippet.
+        assert!(passage.starts_with("Bicycle"));
+    }
+    #[test]
+    fn snippet_handles_unicode_assistance_and_no_literal_anchors() {
+        let passage=format!("{} The cat permission applies to a rented home. {}","Unrelated shelves. ".repeat(30),"More context. ".repeat(20));
+        let snippet=source_snippet(&passage,&["کیا کرائے کے گھر میں بلی رکھ سکتے ہیں؟".into()]);
+        assert!(snippet.contains("cat permission"));assert!(snippet.chars().count()<=320);
+        assert_eq!(source_snippet("😀 漢字 café\n actual source",&["unmatched paraphrase".into()]),"😀 漢字 café actual source");
+        assert_eq!(source_snippet("this is actual source",&["the and while".into()]),"this is actual source");
+        assert!(source_snippet(&"😀".repeat(600),&[]).chars().count()<=320);
     }
     #[test]
     fn chunk_navigation_handles_unicode_and_invalid_indices() {

@@ -11,9 +11,10 @@ Source implemented on `gemma-integration`; build/runtime validation is pending. 
 - [x] Pin the text-only GGUF revision and Windows CPU runtime, SHA-256, license texts and sources.
 - [x] Automatic local document/semantic preparation, SQLite chunk vectors and same-field exact/meaning search with fallback. Only selected-root document text; no photos/OCR-image text/audio/video inputs.
 - [x] Source handling for integrity verification, interrupted downloads, offline reuse, cancellation, invalidation and fallback.
-- [ ] Validate real model download/runtime compatibility, paraphrase retrieval, filters/pagination, interrupted/offline behavior, graceful fallback, reconciliation/root containment, cancellation/worker cleanup and packaged Windows behavior. No builds/tests run for this milestone.
+- [ ] Validate real model download/runtime compatibility, paraphrase retrieval, filters/pagination, interrupted/offline behavior, graceful fallback, reconciliation/root containment, cancellation/worker cleanup and packaged Windows behavior. Unit tests and selected maintainer-build smoke checks are recorded in VALIDATION.md; the remaining scenarios still need validation.
 - [x] Automatic semantic refresh after opt-in download, with a persistent bottom activity bar and pause/resume controls (source; runtime validation pending).
-- [ ] Measure model startup/ranking costs before considering a persistent inference worker or alternate vector index.
+- [x] Reuse the verified inference worker briefly between searches, discard intermediate queued input and hide stale results during a new search (source; latency measurement pending).
+- [ ] Measure cold/warm model startup, ranking latency and memory on real libraries before further optimization or an alternate vector index.
 
 ## Automatic app updates
 
@@ -33,4 +34,5 @@ Existing update-related source is groundwork; the published beta has automatic u
 - [x] Source snippets and validated matching-passage preview for text/extracted Word, with best-effort PDF page/position location.
 - [x] Explicit More related results / Best matches only control with preserved filters and pagination.
 - [x] Create English/Urdu/Roman Urdu demo documents and a separate manual testing guide.
-- [ ] Run the language/model quality checks manually later; user deferred this task. Validate final snippet/preview layout and PDF navigation in a user-requested build/runtime session.
+- [x] Diagnose the user-reported Urdu/Roman Urdu failures, add limited offline keyword assistance and bounded broader-result filtering, and check generated-topic/negative examples locally (calibration, not held-out validation).
+- [ ] Validate language behavior on new unseen wording/documents and the final snippet/preview/PDF layout in a user-requested app build/runtime session. General translation remains outside the limited alias helper.

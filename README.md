@@ -59,7 +59,7 @@ When upgrading from an earlier local build, quit its tray process first. Windows
 ## Current limits
 
 - Windows is the currently validated runtime. macOS/Linux runtime support is unverified.
-- Published beta document search matches indexed words. The `gemma-integration` branch adds optional local EmbeddingGemma 2 text semantic search in source; it has not been built or runtime validated. See [setup and limits](docs/SEMANTIC_SEARCH.md).
+- Published beta document search matches indexed words. The `gemma-integration` branch adds optional local EmbeddingGemma 2 text semantic search. Maintainer Windows builds have been checked with generated demo files; broader language, download and lifecycle validation remains pending, and this is not yet in the published beta. See [setup and limits](docs/SEMANTIC_SEARCH.md).
 - Scanned PDFs need separate OCR. Encrypted, oversized or unsupported documents may be skipped.
 - Media playback/thumbnails depend on installed Windows codecs.
 - Installer upgrade/uninstall and broad migration scenarios still need validation. Successful app startup does not establish all of those outcomes.

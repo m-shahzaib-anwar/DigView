@@ -35,6 +35,8 @@ jobs:
       - if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
         run: npm run build
       - run: cargo test --manifest-path native-core/Cargo.toml --lib
+      - name: Native desktop library tests (no app bundle)
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib
       - if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
         run: npm run tauri build -- --no-bundle
       - if: github.event_name != 'pull_request' || github.event.pull_request.draft == false

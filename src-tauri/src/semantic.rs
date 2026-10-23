@@ -2,7 +2,7 @@
 use digview_core::{db::{self, Result}, engine::Engine, model::{Query, QueryResult}, semantic as core};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::{fs::{self, File}, io::{Read, Write}, net::TcpListener, path::{Path, PathBuf}, process::{Child, Command, Stdio}, sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}}, time::{Duration, Instant}};
+use std::{fs::{self, File}, io::{Read, Write}, net::TcpListener, path::{Path, PathBuf}, process::{Child, Command, Stdio}, sync::{Arc, Weak, Mutex, atomic::{AtomicBool, AtomicUsize, Ordering}}, time::{Duration, Instant}};
 use tauri::{Manager, State};
 const MODEL_URL: &str = "https://huggingface.co/ggml-org/embeddinggemma-2-GGUF/resolve/58faf90940886df2d62be555c8765d00dac362c5/embeddinggemma-2-BF16.gguf";
 const MODEL_HASH: &str = "68bae29d62fb8c7d23e98d21fd4662753ddd636e6b62b8a70dfe059a9844f216";
@@ -14,7 +14,7 @@ const REQUIRED_BYTES: u64 = 1024*1024*1024;
 #[derive(Clone, Default)]
 pub struct Semantic(Arc<Inner>);
 #[derive(Default)]
-struct Inner { busy: AtomicBool, cancel: AtomicBool, stopping: AtomicBool, blocked: AtomicBool, attempted: Mutex<String>, progress: Mutex<Progress>, child: Mutex<Option<Child>> }
+struct Inner { control: Mutex<()>, interrupting: AtomicUsize, busy: AtomicBool, cancel: AtomicBool, stopping: AtomicBool, blocked: AtomicBool, attempted: Mutex<String>, progress: Mutex<Progress>, child: Mutex<Option<Child>>, runtime: Mutex<WarmWorker<Server>> }
 #[derive(Default, Clone, Serialize)]
 struct Progress { phase: String, downloaded: u64, processed: u64, total: u64, indexed: u64, skipped: u64, task: String, finished: bool, message: String }
 #[derive(Serialize)]
@@ -132,14 +132,40 @@ fn extract_runtime(dir: &Path,s: &Semantic) -> Result<PathBuf> {
     if !server.is_file() {return Err("Local runtime archive is missing its server.".into());}
     Ok(server)
 }
-struct Server {state: Semantic, url: String, key: String, client: reqwest::Client,
+// Keep the verified worker warm briefly; idle expiry releases both model RAM and query text.
+const WORKER_IDLE: Duration = Duration::from_secs(120);
+struct WarmWorker<T> { worker: Option<T>, used: Option<Instant> }
+impl<T> Default for WarmWorker<T> { fn default() -> Self {Self {worker:None,used:None}} }
+impl<T> WarmWorker<T> {
+    fn get_or_start(&mut self, now: Instant, healthy: impl FnOnce(&mut T)->bool, start: impl FnOnce()->Result<T>) -> Result<&mut T> {
+        if self.worker.as_mut().is_some_and(|worker|!healthy(worker)) {self.worker.take();}
+        if self.worker.is_none() {self.worker=Some(start()?);}
+        self.used=Some(now);
+        Ok(self.worker.as_mut().unwrap())
+    }
+    fn expire(&mut self, now: Instant) {
+        if self.used.is_some_and(|used|now.saturating_duration_since(used)>=WORKER_IDLE) {self.worker.take();self.used=None;}
+    }
+}
+fn with_server<T>(e:&Engine,s:&Semantic,run:impl FnOnce(&mut Server)->Result<T>)->Result<T> {
+    let mut cache=s.0.runtime.lock().unwrap_or_else(|e|e.into_inner());
+    let server=cache.get_or_start(Instant::now(), |_| {
+        s.0.child.lock().unwrap_or_else(|e|e.into_inner()).as_mut().is_some_and(|child|matches!(child.try_wait(),Ok(None)))
+    }, ||Server::start(e,s))?;
+    let result=run(server);
+    cache.used=Some(Instant::now());
+    if result.is_err() || s.0.cancel.load(Ordering::Acquire) {cache.worker.take();}
+    result
+}
+struct Server {state: Weak<Inner>, url: String, key: String, client: reqwest::Client,
+    last_query: Option<(String,Vec<f32>)>,
     #[cfg(windows)]
     _job: digview_core::document_index::MemoryJob,
 }
 fn stop(s: &Semantic) {
     if let Some(mut child)=s.0.child.lock().unwrap_or_else(|e|e.into_inner()).take() {let _=child.kill(); let _=child.wait();}
 }
-impl Drop for Server {fn drop(&mut self) {stop(&self.state);}}
+impl Drop for Server {fn drop(&mut self) {if let Some(state)=self.state.upgrade() {stop(&Semantic(state));}}}
 impl Server {
     fn start(e: &Engine,s: &Semantic) -> Result<Self> {
         progress(s,"loading","Checking model files and starting the local search engine…");
@@ -162,7 +188,7 @@ impl Server {
             Ok(job)=>job, Err(_)=>{let _=child.kill();let _=child.wait();return Err("Could not contain the local model worker.".into());}
         };
         *s.0.child.lock().unwrap_or_else(|e|e.into_inner())=Some(child);
-        let server=Self {state:s.clone(),url:format!("http://127.0.0.1:{port}"),key,client,
+        let server=Self {state:Arc::downgrade(&s.0),last_query:None,url:format!("http://127.0.0.1:{port}"),key,client,
             #[cfg(windows)]
             _job:job,
         };
@@ -175,6 +201,13 @@ impl Server {
             std::thread::sleep(Duration::from_millis(200));
         }
         Err("Local text model startup timed out. Existing search remains available.".into())
+    }
+    fn query_vector(&mut self,text:String,s:&Semantic)->Result<Vec<f32>> {
+        check_cancel(s)?;
+        if let Some((previous,vector))=&self.last_query {if previous==&text {return Ok(vector.clone());}}
+        let vector=self.embed(text.clone(),s)?;
+        self.last_query=Some((text,vector.clone()));
+        Ok(vector)
     }
     fn embed(&self,text: String,s: &Semantic) -> Result<Vec<f32>> {
         check_cancel(s)?;
@@ -193,9 +226,29 @@ impl Server {
 }
 struct Busy(Semantic);
 impl Drop for Busy {fn drop(&mut self) {self.0.0.busy.store(false,Ordering::Release);}}
+// Fence asynchronous pause/cancel cleanup against new queries resetting cancellation.
+struct Interrupt(Semantic);
+impl Drop for Interrupt {fn drop(&mut self) {self.0.0.interrupting.fetch_sub(1,Ordering::AcqRel);}}
+fn interrupt(s:&Semantic)->Interrupt {
+    let _gate=s.0.control.lock().unwrap_or_else(|e|e.into_inner());
+    s.0.interrupting.fetch_add(1,Ordering::AcqRel);
+    s.0.cancel.store(true,Ordering::Release);
+    Interrupt(s.clone())
+}
 fn acquire(s: &Semantic) -> Result<Busy> {
+    let _gate=s.0.control.lock().unwrap_or_else(|e|e.into_inner());
+    if s.0.stopping.load(Ordering::Acquire) || s.0.interrupting.load(Ordering::Acquire)>0 {
+        return Err("AI search is stopping. Wait for the current action to finish.".into());
+    }
     s.0.busy.compare_exchange(false,true,Ordering::AcqRel,Ordering::Relaxed).map_err(|_|"The model is already busy. Wait for the current task to finish or choose Cancel current task.")?;
     s.0.cancel.store(false,Ordering::Release); Ok(Busy(s.clone()))
+}
+fn search_failure(s:&Semantic,error:&str) {
+    let _gate=s.0.control.lock().unwrap_or_else(|e|e.into_inner());
+    // A pending control action owns the final paused/cancelled/shutdown state.
+    if s.0.interrupting.load(Ordering::Acquire)>0 || s.0.stopping.load(Ordering::Acquire) {return;}
+    if s.0.cancel.load(Ordering::Acquire) {progress(s,"cancelled","AI search interrupted. Existing search remains available.");}
+    else {s.0.blocked.store(true,Ordering::Release);progress(s,"error",error);}
 }
 #[tauri::command]
 pub async fn semantic_status(state: State<'_,Engine>,sem: State<'_,Semantic>) -> Result<Status> {
@@ -209,8 +262,8 @@ pub async fn semantic_status(state: State<'_,Engine>,sem: State<'_,Semantic>) ->
 #[tauri::command]
 pub async fn semantic_action(state: State<'_,Engine>,sem: State<'_,Semantic>,action: String) -> Result<()> {
     let e=state.inner().clone(); let s=sem.inner().clone();
-    if action=="cancel" {s.0.cancel.store(true,Ordering::Release); return tauri::async_runtime::spawn_blocking(move || {stop(&s);Ok::<(),String>(())}).await.map_err(|e|e.to_string())?;}
-    if action=="disable" || action=="pause" {s.0.cancel.store(true,Ordering::Release); return tauri::async_runtime::spawn_blocking(move || {stop(&s);core::set_enabled(&e,false)?;e.set_document_index_enabled(false)?;progress(&s,"paused","AI search paused");e.0.revision.fetch_add(1,Ordering::Relaxed);Ok::<(),String>(())}).await.map_err(|e|e.to_string())?;}
+    if action=="cancel" {let interrupt=interrupt(&s); return tauri::async_runtime::spawn_blocking(move || {let _interrupt=interrupt;stop(&s);s.0.runtime.lock().unwrap_or_else(|e|e.into_inner()).worker.take();Ok::<(),String>(())}).await.map_err(|e|e.to_string())?;}
+    if action=="disable" || action=="pause" {let interrupt=interrupt(&s); return tauri::async_runtime::spawn_blocking(move || {let _interrupt=interrupt;stop(&s);s.0.runtime.lock().unwrap_or_else(|e|e.into_inner()).worker.take();core::set_enabled(&e,false)?;e.set_document_index_enabled(false)?;progress(&s,"paused","AI search paused");e.0.revision.fetch_add(1,Ordering::Relaxed);Ok::<(),String>(())}).await.map_err(|e|e.to_string())?;}
     launch(e,s,action)
 }
 fn launch(e: Engine,s: Semantic,action: String) -> Result<()> {
@@ -226,9 +279,10 @@ fn launch(e: Engine,s: Semantic,action: String) -> Result<()> {
         let _guard=guard;
         let result=(|| -> Result<()> {
             match action.as_str() {
-                "download"=>download(&s,&e),
+                "download"=>{s.0.runtime.lock().unwrap_or_else(|e|e.into_inner()).worker.take();download(&s,&e)},
                 "enable"=> {if !installed(&e) {return Err("Download the model first.".into());} core::set_enabled(&e,true)?; if let Err(err)=check_cancel(&s) {core::set_enabled(&e,false)?;return Err(err);} progress(&s,"ready","AI search resumed. Checking your selected folders…"); Ok(())},
                 "remove"=> {
+                    s.0.runtime.lock().unwrap_or_else(|e|e.into_inner()).worker.take();
                     core::set_enabled(&e,false)?; core::clear(&e)?;
                     let dir=owned_directory(&e)?;
                     // Only fixed application-owned artifacts are removed; no recursive/user paths.
@@ -243,10 +297,11 @@ fn launch(e: Engine,s: Semantic,action: String) -> Result<()> {
                 "index"=> {
                     if !core::enabled(&e)? || !installed(&e) {return Err("Download and enable the model first.".into());}
                     *s.0.attempted.lock().unwrap_or_else(|e|e.into_inner())=core::pending_key(&e)?;
-                    let server=Server::start(&e,&s)?;
+                    with_server(&e,&s,|server| {
                     progress(&s,"indexing","Preparing document text for meaning search on this computer…");
                     core::index(&e,&s.0.cancel,|text|server.embed(text,&s),|n|{let mut p=s.0.progress.lock().unwrap_or_else(|e|e.into_inner());p.processed=n.completed;p.total=n.total;p.indexed=n.indexed;p.skipped=n.skipped;})?;
                     progress(&s,"ready","Ready to search"); Ok(())
+                    })
                 },
                 _=>unreachable!()
             }
@@ -267,19 +322,26 @@ pub async fn semantic_query(state: State<'_,Engine>,sem: State<'_,Semantic>,quer
         let text=query.terms.iter().filter(|t|!t.starts_with("ext:")).cloned().collect::<Vec<_>>().join(" ");
         if text.trim().is_empty() {return fallback(query,"");}
         if !supported() || !core::enabled(&e)? || !installed(&e) || core::counts(&e)?.0==0 {return fallback(query,"");}
+        if s.0.blocked.load(Ordering::Acquire) {return fallback(query,"AI search needs attention. Showing existing search results; choose Retry in Settings.");}
+        let assisted=digview_core::query_language::assist(&text);
+        if assisted.is_none() && digview_core::query_language::urdu_wording(&text) {
+            return fallback(query,"For this wording, try English or exact words from the document.");
+        }
         let _guard=match acquire(&s) {Ok(x)=>x,Err(_)=>return fallback(query,"A semantic task is running. Showing existing search results.")};
+        if s.0.blocked.load(Ordering::Acquire) {return fallback(query,"AI search needs attention. Showing existing search results; choose Retry in Settings.");}
         *s.0.progress.lock().unwrap_or_else(|e|e.into_inner())=Progress {task:"search".into(),..Default::default()};
-        let result=(|| {
-            let server=Server::start(&e,&s)?;
-            let vector=server.embed(format!("task: search result | query: {}",core::bounded_text(&text,1200)),&s)?;
+        let result=with_server(&e,&s,|server| {
+            progress(&s,"searching","Searching indexed text…");
+            let embedding_text=assisted.as_deref().unwrap_or(&text);
+            let vector=server.query_vector(format!("task: search result | query: {}",core::bounded_text(embedding_text,1200)),&s)?;
             check_cancel(&s)?;
             if !core::enabled(&e)? {return Err("Semantic search disabled.".into());}
             core::search_matches(&e, query.clone(), vector, &s.0.cancel, broader.unwrap_or(false))
-        })();
-        match result {Ok(result)=>{progress(&s,"ready","Meaning search complete.");Ok(SearchResponse{result:result.result,matches:result.matches,semantic:true,message:if broader.unwrap_or(false) {"More related results · lower-confidence matches included".into()} else {"Exact matches and related passages".into()}})},Err(_)=>fallback(query,"Local model unavailable. Showing existing search results; retry or check Settings.")}
+        });
+        match result {Ok(result)=>{progress(&s,"ready","Meaning search complete.");Ok(SearchResponse{result:result.result,matches:result.matches,semantic:true,message:if broader.unwrap_or(false) {"More related results · lower-confidence matches included".into()} else {"Exact matches and related passages".into()}})},Err(error)=>{search_failure(&s,&error);fallback(query,if s.0.cancel.load(Ordering::Acquire) {"AI search interrupted. Showing existing search results."} else {"Local model unavailable. Showing existing search results; choose Retry in Settings."})}}
     }).await.map_err(|e|e.to_string())?
 }
-pub fn shutdown(app: &tauri::AppHandle) {let s=app.state::<Semantic>();s.0.stopping.store(true,Ordering::Release);s.0.cancel.store(true,Ordering::Release);stop(s.inner());}
+pub fn shutdown(app: &tauri::AppHandle) {let s=app.state::<Semantic>();let _interrupt=interrupt(s.inner());s.0.stopping.store(true,Ordering::Release);stop(s.inner());s.0.runtime.lock().unwrap_or_else(|e|e.into_inner()).worker.take();}
 
 /// Runs independently of the window so tray-mode indexing continues. Never downloads assets.
 pub fn start_automation(e: Engine,s: Semantic) {
@@ -287,12 +349,16 @@ pub fn start_automation(e: Engine,s: Semantic) {
         while !s.0.stopping.load(Ordering::Acquire) {
             std::thread::sleep(Duration::from_secs(2));
             if s.0.stopping.load(Ordering::Acquire) {break;}
+            // Inference holds this lock; idle cleanup must never make a search look busy.
+            if let Ok(mut cache)=s.0.runtime.try_lock() {cache.expire(Instant::now());}
             let result=(|| -> Result<()> {
                 if !supported() || !core::enabled(&e)? || !installed(&e) || !e.setup_status()?.completed {return Ok(());}
+                if s.0.blocked.load(Ordering::Acquire) {return Ok(());}
                 let scan=e.scan_status()?;
                 if scan.suspended {
                     progress(&s,"paused","Background work paused by scanning settings");
-                    if s.0.busy.load(Ordering::Acquire) && s.0.progress.lock().unwrap_or_else(|e|e.into_inner()).task=="index" {s.0.cancel.store(true,Ordering::Release);stop(&s);}
+                    let indexing=s.0.progress.lock().unwrap_or_else(|e|e.into_inner()).task=="index";
+                    if s.0.busy.load(Ordering::Acquire) && indexing {let _interrupt=interrupt(&s);stop(&s);}
                     return Ok(());
                 }
                 if s.0.busy.load(Ordering::Acquire) || s.0.blocked.load(Ordering::Acquire) || e.job().running {return Ok(());}
@@ -318,4 +384,55 @@ pub fn start_automation(e: Engine,s: Semantic) {
 pub async fn matched_document(state:State<'_,Engine>,id:i64,digest:String)->Result<String>{
     let e=state.inner().clone();
     tauri::async_runtime::spawn_blocking(move||core::matched_text(&e,id,&digest)).await.map_err(|e|e.to_string())?
+}
+
+#[cfg(test)]
+mod warm_worker_tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+    struct Worker(Arc<AtomicUsize>);
+    impl Drop for Worker {fn drop(&mut self) {self.0.fetch_add(1,Ordering::Relaxed);}}
+    #[test]
+    fn interrupt_cleanup_fences_new_queries_and_preserves_cancellation() {
+        let s=Semantic::default();let active=acquire(&s).unwrap();
+        let first=interrupt(&s);let second=interrupt(&s);drop(active);
+        assert!(acquire(&s).is_err());assert!(s.0.cancel.load(Ordering::Acquire));
+        drop(first);assert!(acquire(&s).is_err());
+        drop(second);let _next=acquire(&s).unwrap();assert!(!s.0.cancel.load(Ordering::Acquire));
+    }
+    #[test]
+    fn shutdown_does_not_allow_future_workers() {
+        let s=Semantic::default();s.0.stopping.store(true,Ordering::Release);
+        assert!(acquire(&s).is_err());
+    }
+    #[test]
+    fn search_errors_remain_visible_but_do_not_override_pause_or_cancellation() {
+        let s=Semantic::default();search_failure(&s,"Engine could not start");
+        assert!(s.0.blocked.load(Ordering::Acquire));
+        assert_eq!(s.0.progress.lock().unwrap().phase,"error");
+        s.0.blocked.store(false,Ordering::Release);
+        let pending=interrupt(&s);progress(&s,"paused","AI search paused");
+        search_failure(&s,"Connection closed during pause");
+        assert!(!s.0.blocked.load(Ordering::Acquire));assert_eq!(s.0.progress.lock().unwrap().phase,"paused");
+        drop(pending);search_failure(&s,"Cancelled request");
+        assert!(!s.0.blocked.load(Ordering::Acquire));assert_eq!(s.0.progress.lock().unwrap().phase,"cancelled");
+    }
+    #[test]
+    fn reuses_worker_and_releases_it_only_after_idle_timeout() {
+        let dropped=Arc::new(AtomicUsize::new(0));
+        let mut cache=WarmWorker::default();let now=Instant::now();
+        cache.get_or_start(now, |_|true, ||Ok(Worker(dropped.clone()))).unwrap();
+        cache.get_or_start(now+Duration::from_secs(100), |_|true, ||panic!("must reuse warm worker")).unwrap();
+        cache.expire(now+Duration::from_secs(219));assert!(cache.worker.is_some());
+        cache.expire(now+Duration::from_secs(220));assert!(cache.worker.is_none());
+        assert_eq!(dropped.load(Ordering::Relaxed),1);
+    }
+    #[test]
+    fn dead_worker_is_dropped_before_restart_and_failed_start_is_retryable() {
+        let dropped=Arc::new(AtomicUsize::new(0));let mut cache=WarmWorker::default();let now=Instant::now();
+        cache.get_or_start(now, |_|true, ||Ok(Worker(dropped.clone()))).unwrap();
+        assert!(cache.get_or_start(now, |_|false, ||{assert_eq!(dropped.load(Ordering::Relaxed),1);Err("offline".into())}).is_err());
+        assert!(cache.worker.is_none());
+        cache.get_or_start(now, |_|true, ||Ok(Worker(dropped.clone()))).unwrap();
+    }
 }
