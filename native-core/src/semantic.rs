@@ -116,8 +116,8 @@ fn additional_candidates(ranked:&[(i64,f32)],broader:bool)->std::collections::Ha
     let mut selected=std::collections::HashSet::new();
     let Some(&(first,top))=ranked.first() else {return selected;};
     if !top.is_finite() {return selected;}
-    let runner=ranked.get(1).map(|x|x.1).unwrap_or(0.0);
-    let separated=top>=0.63 && top-runner>=0.03;
+    // A missing runner-up is not evidence of separation from unrelated content.
+    let separated=top>=0.63 && ranked.get(1).is_some_and(|(_,runner)|runner.is_finite() && top-*runner>=0.03);
     if !relevant(top) && separated {selected.insert(first);}
     if broader && (relevant(top) || separated) {
         for &(id,score) in ranked.iter().take(20) {
@@ -367,6 +367,8 @@ mod tests {
     fn expanded_band_requires_an_anchor_and_never_fills_a_flat_score_list() {
         assert!(additional_candidates(&[(1,0.6447),(2,0.6359),(3,0.6344)],true).is_empty());
         assert!(additional_candidates(&[(1,0.603),(2,0.5931)],true).is_empty());
+        assert!(additional_candidates(&[(1,0.6439)],false).is_empty());
+        assert!(additional_candidates(&[(1,0.6439)],true).is_empty());
         assert_eq!(additional_candidates(&[(1,0.6439),(2,0.6046)],false),std::collections::HashSet::from([1]));
         assert_eq!(additional_candidates(&[(1,0.7197),(2,0.6499),(3,0.6151)],true),std::collections::HashSet::from([1]));
         assert_eq!(additional_candidates(&[(1,0.7),(2,0.65),(3,0.63)],true),std::collections::HashSet::from([1,2]));
@@ -457,16 +459,18 @@ mod tests {
     }
     #[test]
     fn separated_low_score_is_evaluated_within_filters_and_keeps_exact_hits() {
-        let (_t,e,_)=fixture();let cancel=AtomicBool::new(false);index(&e,&cancel,|_|Ok(vector()),|_|{}).unwrap();
+        let (_t,e,root)=fixture();let cancel=AtomicBool::new(false);
+        fs::write(root.join("third.txt"),"short").unwrap();e.scan_mode(false).unwrap();seed_text(&e);
+        index(&e,&cancel,|_|Ok(vector()),|_|{}).unwrap();
         let c=db::connect(&e.0.db).unwrap();
-        for (name,score) in [("first.txt",0.6439f32),("second.txt",0.635f32)] {
+        for (name,score) in [("first.txt",0.6439f32),("second.txt",0.635f32),("third.txt",0.60f32)] {
             let mut v=vec![0f32;DIM];v[0]=score;v[1]=(1.-score*score).sqrt();
             c.execute("UPDATE semantic_chunks SET vector=? WHERE file_id=(SELECT id FROM files WHERE name=?)",params![v.iter().flat_map(|x|x.to_le_bytes()).collect::<Vec<_>>(),name]).unwrap();
         }
         let q=||Query{terms:vec!["unmatched phrase".into()],limit:200,..Default::default()};
         assert_eq!(search_matches(&e,q(),vector(),&cancel,false).unwrap().result.total,0);
         assert_eq!(search_matches(&e,q(),vector(),&cancel,true).unwrap().result.total,0);
-        // first.txt is shorter; removing second.txt from the query scope creates a distinct lead.
+        // first.txt and third.txt are shorter; filtering removes the close second.txt runner-up.
         let mut filtered=q();filtered.max_size=Some(14);
         let found=search_matches(&e,filtered.clone(),vector(),&cancel,false).unwrap();
         assert_eq!(found.result.total,1);assert_eq!(found.result.files[0].name,"first.txt");
