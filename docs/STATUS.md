@@ -154,3 +154,10 @@ Contributors should use forks and pull requests. Contribution templates and Wind
 - Local release checksums/build outputs and ignored tooling/demo artifacts remain outside the commit. Existing test evidence is carried into the PR; no new app build or installer is run. Latest affected suites: frontend 13, semantic core 13, native library 3 passed; broader UI, real PDF navigation and deferred language checks remain pending.
 - Draft PR workflow now runs existing tests but skips frontend/application builds and artifact upload; marking ready-for-review triggers the usual full workflow. This avoids an automatic desktop EXE build merely from creating this requested draft. Manual workflow dispatch remains explicit build authorization.
 - Commands: read project/status/PR template; git status/diff/log/remotes; gh authentication and open-PR lookup; remote branch checks; workflow/document edits; staged diff review. Commit/push/PR results recorded after publication. No main merge or release publication.
+
+### Draft PR published
+
+- Committed implementation as b7c38c4 and pushed gemma-integration to origin. Created https://github.com/m-shahzaib-anwar/DigView/pull/2 and attached it to the current chat. GitHub confirms OPEN, isDraft=true, base main, head gemma-integration. No main merge or release.
+- Staged whitespace review passed after trimming an extra final blank line in the optional-component notice. Local untracked releases/checksums.json remains excluded. No local tests or app builds were rerun for PR publication.
+- Initial GitHub status snapshot: Secret audit passed; validate (windows-latest) in progress. Draft build/upload steps are guarded off. Do not claim CI success until the run completes. Pending manual UI/model/language validation remains listed in the PR body.
+- Next: user completes build/runtime review and deferred language checks; review CI results and keep PR draft until ready. A ready-for-review transition will request full CI builds under the documented workflow.
