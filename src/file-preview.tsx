@@ -1,3 +1,5 @@
+import { invoke } from "@tauri-apps/api/core";
+import { findPassage } from "./match-passage";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Loader2, Music2 } from "lucide-react";
 import { api, desktop } from "./api";
@@ -17,10 +19,19 @@ export function FilePreview({
   file: FileRecord;
   fallback: ReactNode;
 }) {
-  const kind = previewKind(file.extension, file.name);
+  const kind =
+    file.extension === "docx" && file.search_match
+      ? "text"
+      : previewKind(file.extension, file.name);
+  const match = file.search_match;
+  const mark = useRef<HTMLElement | null>(null);
   const [info, setInfo] = useState<ContentPreview | null>(null);
   const [error, setError] = useState("");
   const [wrap, setWrap] = useState(true);
+  useEffect(() => {
+    if (info?.kind === "text" && match)
+      mark.current?.scrollIntoView({ block: "center" });
+  }, [info, match?.passage]);
   const media = useRef<HTMLMediaElement | null>(null);
   const active = useRef(true);
   useEffect(() => {
@@ -30,8 +41,25 @@ export function FilePreview({
     let token: string | null = null;
     setInfo(null);
     setError("");
-    void api
-      .openPreview(file.id)
+    const load = async () => {
+      if (match) {
+        const text = await invoke<string>("matched_document", {
+          id: file.id,
+          digest: match.digest,
+        });
+        if (file.extension === "docx")
+          return {
+            kind: "text" as const,
+            mime: "text/plain",
+            token: null,
+            text,
+            truncated: false,
+            encoding: "Extracted Word text",
+          };
+      }
+      return api.openPreview(file.id);
+    };
+    void load()
       .then((result) => {
         token = result.token;
         if (!alive) {
@@ -59,7 +87,7 @@ export function FilePreview({
       }
       if (token) void api.closePreview(token).catch(() => {});
     };
-  }, [file.id, kind]);
+  }, [file.id, kind, match?.digest]);
   if (!kind) return <>{fallback}</>;
   if (!desktop)
     return (
@@ -82,6 +110,10 @@ export function FilePreview({
         Loading local preview…
       </div>
     );
+  const range =
+    info.kind === "text" && match && info.text
+      ? findPassage(info.text, match.passage)
+      : null;
   if (info.kind === "text")
     return (
       <div className="text-preview">
@@ -101,8 +133,22 @@ export function FilePreview({
           tabIndex={0}
           aria-label={`Text preview of ${file.name}`}
         >
-          {info.text || "(Empty file)"}
+          {range && info.text ? (
+            <>
+              {info.text.slice(0, range.start)}
+              <mark ref={mark}>{info.text.slice(range.start, range.end)}</mark>
+              {info.text.slice(range.end)}
+            </>
+          ) : (
+            info.text || "(Empty file)"
+          )}
         </pre>
+        {match && !range && (
+          <p className="inline-preview-note">
+            The matching passage is outside this preview. Open original to read
+            the full file.
+          </p>
+        )}
         {info.truncated && (
           <p className="inline-preview-note">
             Showing the first 256 KB. Open original to read the full file.
@@ -111,7 +157,13 @@ export function FilePreview({
       </div>
     );
   const url = api.previewUrl(info.token!);
-  if (info.kind === "pdf") return <PdfPreview url={url} />;
+  if (info.kind === "pdf")
+    return (
+      <>
+        <p className="matched-passage-summary">{match?.snippet}</p>
+        <PdfPreview url={url} passage={match?.passage} />
+      </>
+    );
   const mediaError = () => {
     if (!active.current) return;
     localDiagnostics.record({ event: "preview_failed", code: "decode_failed" });

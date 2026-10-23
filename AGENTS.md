@@ -9,3 +9,5 @@ Do not claim feature parity, faster performance, or cross-platform testing witho
 No subagents required. Update docs/STATUS.md with commands, test outcomes, blockers and next actions before ending a work session.
 
 User preference (2026-10-22): do not automatically run compile checks, frontend/native builds or installer packaging after changes. Make source/documentation changes only; the user will build at the end. Run compilation/build/packaging only when the user explicitly requests it. Do not run tests unless explicitly requested.
+
+User preference update (2026-10-23): after code updates, run only relevant necessary tests. Never build a desktop application EXE, frontend/native application bundle or installer unless the user explicitly asks. Native test harness compilation is allowed as part of running necessary tests; do not run standalone compile checks or app build commands.

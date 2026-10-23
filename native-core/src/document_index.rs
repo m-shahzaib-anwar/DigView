@@ -365,7 +365,7 @@ fn run_parser_at(
 }
 
 #[cfg(windows)]
-struct MemoryJob(windows::Win32::Foundation::HANDLE);
+pub struct MemoryJob(windows::Win32::Foundation::HANDLE);
 #[cfg(windows)]
 impl Drop for MemoryJob {
     fn drop(&mut self) {
@@ -376,6 +376,10 @@ impl Drop for MemoryJob {
 }
 #[cfg(windows)]
 fn memory_limit(child: &std::process::Child) -> Result<MemoryJob> {
+    worker_job(child, 512 * 1024 * 1024)
+}
+#[cfg(windows)]
+pub fn worker_job(child: &std::process::Child, memory_bytes: usize) -> Result<MemoryJob> {
     use std::os::windows::io::AsRawHandle;
     use windows::Win32::{Foundation::HANDLE, System::JobObjects::*};
     unsafe {
@@ -383,7 +387,7 @@ fn memory_limit(child: &std::process::Child) -> Result<MemoryJob> {
         let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
         limits.BasicLimitInformation.LimitFlags =
             JOB_OBJECT_LIMIT_PROCESS_MEMORY | JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        limits.ProcessMemoryLimit = 512 * 1024 * 1024;
+        limits.ProcessMemoryLimit = memory_bytes;
         SetInformationJobObject(
             job.0,
             JobObjectExtendedLimitInformation,

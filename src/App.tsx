@@ -1,3 +1,4 @@
+import { SemanticSettings, semanticQuery, ActivityBar } from "./semantic";
 import { Modal } from "./modal";
 import { AddFoldersDialog } from "./add-folders-dialog";
 import { setupService } from "./setup-service";
@@ -213,6 +214,10 @@ function App() {
   const [boot, setBoot] = useState<Bootstrap | null>(null);
   const [view, setView] = useState<View>("home");
   const [search, setSearch] = useState("");
+  const meaning = desktop;
+  const [broader, setBroader] = useState(false);
+  const [semanticResults, setSemanticResults] = useState(false);
+  const [meaningNotice, setMeaningNotice] = useState("");
   const [debounced, setDebounced] = useState("");
   const [result, setResult] = useState<QueryResult>(initialResult);
   const [sort, setSort] = useState("recent");
@@ -298,7 +303,7 @@ function App() {
   useEffect(() => {
     const timer = setTimeout(() => setDebounced(search), 180);
     return () => clearTimeout(timer);
-  }, [search]);
+  }, [search, meaning]);
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
@@ -354,6 +359,10 @@ function App() {
       clearInterval(timer);
     };
   }, [refresh, notify]);
+  useEffect(
+    () => setBroader(false),
+    [debounced, view, rootId, source, cleanup, favourites],
+  );
   const parsed = useMemo(() => parseSearch(debounced), [debounced]);
   const query = useMemo<Query>(
     () => ({
@@ -392,15 +401,38 @@ function App() {
   useEffect(() => {
     setOffset(0);
     setSelected(new Set());
-  }, [debounced, view, sort, rootId, source, cleanup, favourites]);
+  }, [debounced, view, sort, rootId, source, cleanup, favourites, meaning]);
   useEffect(() => {
     if (!boot || !isLibrary) return;
     const epoch = ++queryEpoch.current;
     setLoading(true);
-    api
-      .query(query)
+    setMeaningNotice(
+      meaning && debounced ? "Searching indexed text by meaning…" : "",
+    );
+    const request =
+      meaning && debounced && desktop
+        ? semanticQuery(query, broader)
+        : api
+            .query(query)
+            .then((result) => ({
+              result,
+              matches: undefined,
+              semantic: false,
+              message: "",
+            }));
+    request
       .then((data) => {
-        if (epoch === queryEpoch.current) setResult(data);
+        if (epoch === queryEpoch.current) {
+          setResult({
+            ...data.result,
+            files: data.result.files.map((file) => ({
+              ...file,
+              search_match: data.matches?.[String(file.id)],
+            })),
+          });
+          setSemanticResults(data.semantic);
+          setMeaningNotice(data.message);
+        }
       })
       .catch((error) => {
         if (epoch === queryEpoch.current) notify(errorText(error), true);
@@ -411,7 +443,7 @@ function App() {
     return () => {
       queryEpoch.current++;
     };
-  }, [query, revision, !!boot, isLibrary, notify]);
+  }, [query, revision, !!boot, isLibrary, notify, meaning, debounced, broader]);
   useEffect(() => {
     if (view !== "duplicates") return;
     let alive = true;
@@ -709,6 +741,11 @@ function App() {
             </button>
           </div>
         </header>
+        {meaningNotice && (
+          <div className="semantic-search-notice" role="status">
+            {meaningNotice}
+          </div>
+        )}
         {!desktop && (
           <div className="demo-banner">
             <span>
@@ -924,6 +961,19 @@ function App() {
                         {result.total.toLocaleString()} files{" "}
                         <span className="middle-dot">·</span>{" "}
                         {formatBytes(result.bytes)}
+                        {debounced && semanticResults && (
+                          <button
+                            className="text-button related-results-control"
+                            onClick={() => {
+                              setOffset(0);
+                              setBroader((value) => !value);
+                            }}
+                          >
+                            {broader
+                              ? "Best matches only"
+                              : "More related results"}
+                          </button>
+                        )}
                         {cleanup === "screenshots"
                           ? " · Older than 30 days"
                           : cleanup === "downloads"
@@ -1493,6 +1543,7 @@ function App() {
                   changed={refresh}
                   notify={notify}
                 />
+                <SemanticSettings />
                 <HiddenItemsPanel
                   disabled={hideLocked}
                   revision={revision}
@@ -1642,6 +1693,7 @@ function App() {
           </main>
         )}
       </div>
+      <ActivityBar job={job} ocr={ocrBusy || !!ocrBatch} updatesBusy={busy} />
 
       {selected.size > 0 && (
         <div className="selection-bar">
@@ -2053,7 +2105,7 @@ function FileCard({
   return (
     <article
       data-file-id={file.id}
-      className={`file-card ${selected ? "selected" : ""}`}
+      className={`file-card ${selected ? "selected" : ""} ${file.search_match ? "has-match" : ""}`}
     >
       <button
         className="file-preview"
@@ -2076,6 +2128,15 @@ function FileCard({
       <button className="file-label" onClick={preview} title={file.name}>
         {file.name}
       </button>
+      {file.search_match && (
+        <button
+          className="match-snippet"
+          onClick={preview}
+          title={file.search_match.snippet}
+        >
+          {file.search_match.snippet}
+        </button>
+      )}
       <div className="file-meta">
         <span>{formatBytes(file.size)}</span>
         <span>
@@ -2116,7 +2177,9 @@ function FileBrowser({
     return () => observer.disconnect();
   }, []);
   const columns = layout === "list" ? 1 : Math.max(2, Math.floor(width / 205));
-  const rowHeight = layout === "list" ? 66 : 220;
+  const hasMatches = files.some((file) => !!file.search_match);
+  const rowHeight =
+    layout === "list" ? (hasMatches ? 100 : 66) : hasMatches ? 275 : 220;
   const virtualizer = useVirtualizer({
     count: Math.ceil(files.length / columns),
     getScrollElement: () => scroll.current,
@@ -2136,7 +2199,7 @@ function FileBrowser({
       ) : (
         <div
           key={file.id}
-          className={`file-list-row ${selected.has(file.id) ? "selected" : ""}`}
+          className={`file-list-row ${selected.has(file.id) ? "selected" : ""} ${hasMatches ? "has-match" : ""}`}
           data-file-id={file.id}
         >
           <button
@@ -2156,6 +2219,11 @@ function FileBrowser({
           >
             {file.name}
             <small>{file.extension.toUpperCase()}</small>
+            {file.search_match && (
+              <span className="match-snippet" title={file.search_match.snippet}>
+                {file.search_match.snippet}
+              </span>
+            )}
           </button>
           <span>{prettyDate(file.modified)}</span>
           <span>{formatBytes(file.size)}</span>

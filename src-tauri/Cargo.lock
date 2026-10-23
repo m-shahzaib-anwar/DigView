@@ -895,17 +895,20 @@ name = "digview"
 version = "0.1.0"
 dependencies = [
  "digview-core",
+ "getrandom 0.4.3",
  "open",
  "reqwest",
  "rfd",
  "serde",
  "serde_json",
+ "sha2",
  "tauri",
  "tauri-build",
  "tauri-plugin-clipboard-manager",
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
  "winreg",
+ "zip",
 ]
 
 [[package]]

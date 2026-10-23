@@ -5,6 +5,8 @@ mod background;
 
 #[cfg(feature = "desktop")]
 mod updates;
+#[cfg(feature = "desktop")]
+mod semantic;
 
 #[cfg(feature = "desktop")]
 mod content_preview;
@@ -497,6 +499,7 @@ mod desktop {
                     env!("CARGO_PKG_VERSION"),
                 ));
                 app.manage(crate::updates::Updates::default());
+                app.manage(crate::semantic::Semantic::default());
                 app.manage(std::sync::Arc::new(
                     digview_core::content_preview::PreviewStore::default(),
                 ));
@@ -513,6 +516,7 @@ mod desktop {
                 app.manage(preferences);
                 crate::background::install_tray(app)?;
                 preview::prune_cache(&engine);
+                crate::semantic::start_automation(engine.clone(), app.state::<crate::semantic::Semantic>().inner().clone());
                 app.manage(engine.watch_selected());
                 app.manage(engine);
                 if setting_up {
@@ -543,6 +547,10 @@ mod desktop {
                 }
             })
             .invoke_handler(tauri::generate_handler![
+                crate::semantic::semantic_status,
+                crate::semantic::semantic_action,
+                crate::semantic::semantic_query,
+                crate::semantic::matched_document,
                 setup_status,
                 setup_suggestions,
                 choose_suggested_setup_folder,
@@ -600,6 +608,7 @@ mod desktop {
             .expect("Could not start DigView")
             .run(|app, event| {
                 if let tauri::RunEvent::Exit = event {
+                    crate::semantic::shutdown(app);
                     app.state::<std::sync::Arc<crate::diagnostics::Diagnostics>>()
                         .clean_shutdown();
                 }

@@ -28,6 +28,7 @@ import {
   type SetupInitial,
 } from "./setup-service";
 import "./onboarding.css";
+import { SemanticSettings } from "./semantic";
 
 const steps = ["Welcome", "Folders", "Search", "Preferences"];
 const errorText = (error: unknown) => String(error).replace(/^Error:\s*/, "");
@@ -418,6 +419,7 @@ function Onboarding({
                       title="Search inside documents"
                       description="Index embedded text in PDFs, DOCX, TXT and supported code files. Background processing uses extra disk space."
                     />
+                    <SemanticSettings onboarding />
                     <div className="setup-note">
                       <ShieldCheck size={18} />
                       <p>
