@@ -26,3 +26,7 @@ The optional Node canvas dependency is conservatively included in the dependency
 - Trash: https://github.com/Byron/trash-rs
 
 No proprietary reference-app assets or branding are bundled.
+
+## Optional semantic model/runtime
+
+Unbuilt `gemma-integration` source adds opt-in downloads of the ggml-org EmbeddingGemma 2 text-only BF16 GGUF (Apache 2.0) and llama.cpp b11835 Windows x64 CPU runtime (MIT). These are separate from the app license and the published beta. Full terms and attribution are retained in `src-tauri/EMBEDDINGGEMMA_NOTICES.txt`, embedded in the executable, included as a bundle resource and copied into the model cache. Pinned sources/checksums are in [SEMANTIC_SEARCH.md](SEMANTIC_SEARCH.md). No weights or executable runtime assets were downloaded in the implementation session.

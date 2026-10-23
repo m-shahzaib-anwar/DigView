@@ -80,6 +80,7 @@ pub fn init(path: &Path) -> Result<()> {
     crate::setup::init(&conn, had_totals)?;
     crate::visibility::init(&conn)?;
     crate::document_index::init(&conn)?;
+    crate::semantic::init(&conn)?;
     if !had_totals {
         conn.execute_batch("BEGIN;
           INSERT OR REPLACE INTO totals SELECT 'all',count(*),coalesce(sum(size),0) FROM files;
@@ -203,7 +204,10 @@ pub fn stats(conn: &Connection) -> Result<LibraryStats> {
     })
 }
 pub fn query(conn: &Connection, q: Query) -> Result<QueryResult> {
-    let simple = !q.favourites
+    query_ranked(conn, q, false)
+}
+pub fn query_ranked(conn: &Connection, q: Query, semantic: bool) -> Result<QueryResult> {
+    let simple = !semantic && !q.favourites
         && q.terms.is_empty()
         && q.min_size.is_none()
         && q.max_size.is_none()
@@ -225,6 +229,7 @@ pub fn query(conn: &Connection, q: Query) -> Result<QueryResult> {
         None
     };
     let mut clauses = vec!["1=1".to_owned()];
+    if semantic { clauses.push("id IN (SELECT file_id FROM semantic_candidates)".into()); }
     let mut args: Vec<Value> = vec![];
     if q.favourites {
         clauses.push("id IN (SELECT file_id FROM favourites)".into());
@@ -268,7 +273,7 @@ pub fn query(conn: &Connection, q: Query) -> Result<QueryResult> {
         if let Some(extension) = term.strip_prefix("ext:") {
             clauses.push("extension=?".into());
             args.push(extension.to_lowercase().into());
-        } else if !term.is_empty() {
+        } else if !semantic && !term.is_empty() {
             // A quoted FTS prefix is safe even when filenames contain punctuation or operators.
             let fts = format!("\"{}\"*", term.replace('"', "\"\""));
             clauses.push("(id IN (SELECT rowid FROM files_fts WHERE files_fts MATCH ?) OR id IN (SELECT rowid FROM image_text_fts WHERE image_text_fts MATCH ?) OR id IN (SELECT rowid FROM document_text_fts WHERE document_text_fts MATCH ?))".into());
@@ -288,12 +293,12 @@ pub fn query(conn: &Connection, q: Query) -> Result<QueryResult> {
         )
         .map_err(|e| e.to_string())?
     };
-    let order = match q.sort.as_str() {
+    let order = if semantic { "(SELECT score FROM semantic_candidates WHERE file_id=visible_files.id) DESC,id ASC" } else { match q.sort.as_str() {
         "name" => "name COLLATE NOCASE ASC,id ASC",
         "oldest" => "modified ASC,id ASC",
         "size" => "size DESC,id DESC",
         _ => "modified DESC,id DESC",
-    };
+    }};
     args.push(q.limit.clamp(1, 200).into());
     args.push(q.offset.max(0).into());
     let mut stmt = conn

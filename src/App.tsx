@@ -1,3 +1,9 @@
+import {
+  SemanticSettings,
+  semanticQuery,
+  invalidateSemanticQuery,
+  ActivityBar,
+} from "./semantic";
 import { Modal } from "./modal";
 import { AddFoldersDialog } from "./add-folders-dialog";
 import { setupService } from "./setup-service";
@@ -213,6 +219,10 @@ function App() {
   const [boot, setBoot] = useState<Bootstrap | null>(null);
   const [view, setView] = useState<View>("home");
   const [search, setSearch] = useState("");
+  const meaning = desktop;
+  const [broader, setBroader] = useState(false);
+  const [semanticResults, setSemanticResults] = useState(false);
+  const [meaningNotice, setMeaningNotice] = useState("");
   const [debounced, setDebounced] = useState("");
   const [result, setResult] = useState<QueryResult>(initialResult);
   const [sort, setSort] = useState("recent");
@@ -231,6 +241,7 @@ function App() {
   const [groups, setGroups] = useState<DuplicateGroup[]>([]);
   const [revision, setRevision] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [queryLoading, setQueryLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [job, setJob] = useState<Job | null>(null);
   const [toast, setToast] = useState<{ text: string; error: boolean } | null>(
@@ -298,7 +309,7 @@ function App() {
   useEffect(() => {
     const timer = setTimeout(() => setDebounced(search), 180);
     return () => clearTimeout(timer);
-  }, [search]);
+  }, [search, meaning]);
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
@@ -354,6 +365,10 @@ function App() {
       clearInterval(timer);
     };
   }, [refresh, notify]);
+  useEffect(
+    () => setBroader(false),
+    [debounced, view, rootId, source, cleanup, favourites],
+  );
   const parsed = useMemo(() => parseSearch(debounced), [debounced]);
   const query = useMemo<Query>(
     () => ({
@@ -392,26 +407,69 @@ function App() {
   useEffect(() => {
     setOffset(0);
     setSelected(new Set());
-  }, [debounced, view, sort, rootId, source, cleanup, favourites]);
+  }, [debounced, view, sort, rootId, source, cleanup, favourites, meaning]);
   useEffect(() => {
     if (!boot || !isLibrary) return;
+    if (search !== debounced) {
+      invalidateSemanticQuery();
+      setMeaningNotice("");
+      setQueryLoading(true);
+      return;
+    }
     const epoch = ++queryEpoch.current;
-    setLoading(true);
-    api
-      .query(query)
+    setQueryLoading(true);
+    setMeaningNotice(
+      meaning && debounced ? "Searching indexed text by meaning…" : "",
+    );
+    const request =
+      meaning && debounced && desktop
+        ? semanticQuery(query, broader)
+        : api.query(query).then((result) => ({
+            result,
+            matches: undefined,
+            semantic: false,
+            message: "",
+          }));
+    request
       .then((data) => {
-        if (epoch === queryEpoch.current) setResult(data);
+        if (epoch === queryEpoch.current) {
+          setResult({
+            ...data.result,
+            files: data.result.files.map((file) => ({
+              ...file,
+              search_match: data.matches?.[String(file.id)],
+            })),
+          });
+          setSemanticResults(data.semantic);
+          setMeaningNotice(data.message);
+        }
       })
       .catch((error) => {
-        if (epoch === queryEpoch.current) notify(errorText(error), true);
+        if (epoch === queryEpoch.current) {
+          setResult(initialResult);
+          setSemanticResults(false);
+          setMeaningNotice("");
+          notify(errorText(error), true);
+        }
       })
       .finally(() => {
-        if (epoch === queryEpoch.current) setLoading(false);
+        if (epoch === queryEpoch.current) setQueryLoading(false);
       });
     return () => {
       queryEpoch.current++;
     };
-  }, [query, revision, !!boot, isLibrary, notify]);
+  }, [
+    query,
+    revision,
+    !!boot,
+    isLibrary,
+    notify,
+    meaning,
+    search,
+    debounced,
+    broader,
+  ]);
+  const searchPending = search !== debounced || (!!debounced && queryLoading);
   useEffect(() => {
     if (view !== "duplicates") return;
     let alive = true;
@@ -709,6 +767,11 @@ function App() {
             </button>
           </div>
         </header>
+        {meaningNotice && (
+          <div className="semantic-search-notice" role="status">
+            {meaningNotice}
+          </div>
+        )}
         {!desktop && (
           <div className="demo-banner">
             <span>
@@ -921,9 +984,28 @@ function App() {
                     <div>
                       <h1>{title}</h1>
                       <p>
-                        {result.total.toLocaleString()} files{" "}
-                        <span className="middle-dot">·</span>{" "}
-                        {formatBytes(result.bytes)}
+                        {searchPending
+                          ? "Searching…"
+                          : `${result.total.toLocaleString()} files`}{" "}
+                        {!searchPending && (
+                          <>
+                            <span className="middle-dot">·</span>{" "}
+                            {formatBytes(result.bytes)}
+                          </>
+                        )}
+                        {!searchPending && debounced && semanticResults && (
+                          <button
+                            className="text-button related-results-control"
+                            onClick={() => {
+                              setOffset(0);
+                              setBroader((value) => !value);
+                            }}
+                          >
+                            {broader
+                              ? "Best matches only"
+                              : "More related results"}
+                          </button>
+                        )}
                         {cleanup === "screenshots"
                           ? " · Older than 30 days"
                           : cleanup === "downloads"
@@ -1082,10 +1164,15 @@ function App() {
                     </div>
                   </div>
                 </div>
-                {loading && result.files.length === 0 ? (
+                {searchPending ||
+                ((loading || queryLoading) && result.files.length === 0) ? (
                   <div className="loading-state">
                     <Loader2 size={25} className="spinning" />
-                    <p>Bringing your library into view…</p>
+                    <p>
+                      {searchPending
+                        ? "Searching your library…"
+                        : "Bringing your library into view…"}
+                    </p>
                   </div>
                 ) : result.files.length === 0 ? (
                   <Empty
@@ -1141,7 +1228,7 @@ function App() {
                         <div>
                           <button
                             className="button small-button"
-                            disabled={offset === 0 || loading}
+                            disabled={offset === 0 || loading || queryLoading}
                             onClick={() =>
                               setOffset((n) => Math.max(0, n - 120))
                             }
@@ -1150,7 +1237,11 @@ function App() {
                           </button>
                           <button
                             className="button small-button"
-                            disabled={offset + 120 >= result.total || loading}
+                            disabled={
+                              offset + 120 >= result.total ||
+                              loading ||
+                              queryLoading
+                            }
                             onClick={() => setOffset((n) => n + 120)}
                           >
                             Next <ArrowRight size={14} />
@@ -1493,6 +1584,7 @@ function App() {
                   changed={refresh}
                   notify={notify}
                 />
+                <SemanticSettings />
                 <HiddenItemsPanel
                   disabled={hideLocked}
                   revision={revision}
@@ -1642,6 +1734,7 @@ function App() {
           </main>
         )}
       </div>
+      <ActivityBar job={job} ocr={ocrBusy || !!ocrBatch} updatesBusy={busy} />
 
       {selected.size > 0 && (
         <div className="selection-bar">
@@ -2053,7 +2146,7 @@ function FileCard({
   return (
     <article
       data-file-id={file.id}
-      className={`file-card ${selected ? "selected" : ""}`}
+      className={`file-card ${selected ? "selected" : ""} ${file.search_match ? "has-match" : ""}`}
     >
       <button
         className="file-preview"
@@ -2076,6 +2169,15 @@ function FileCard({
       <button className="file-label" onClick={preview} title={file.name}>
         {file.name}
       </button>
+      {file.search_match && (
+        <button
+          className="match-snippet"
+          onClick={preview}
+          title={file.search_match.snippet}
+        >
+          {file.search_match.snippet}
+        </button>
+      )}
       <div className="file-meta">
         <span>{formatBytes(file.size)}</span>
         <span>
@@ -2116,7 +2218,9 @@ function FileBrowser({
     return () => observer.disconnect();
   }, []);
   const columns = layout === "list" ? 1 : Math.max(2, Math.floor(width / 205));
-  const rowHeight = layout === "list" ? 66 : 220;
+  const hasMatches = files.some((file) => !!file.search_match);
+  const rowHeight =
+    layout === "list" ? (hasMatches ? 100 : 66) : hasMatches ? 275 : 220;
   const virtualizer = useVirtualizer({
     count: Math.ceil(files.length / columns),
     getScrollElement: () => scroll.current,
@@ -2136,7 +2240,7 @@ function FileBrowser({
       ) : (
         <div
           key={file.id}
-          className={`file-list-row ${selected.has(file.id) ? "selected" : ""}`}
+          className={`file-list-row ${selected.has(file.id) ? "selected" : ""} ${hasMatches ? "has-match" : ""}`}
           data-file-id={file.id}
         >
           <button
@@ -2156,6 +2260,11 @@ function FileBrowser({
           >
             {file.name}
             <small>{file.extension.toUpperCase()}</small>
+            {file.search_match && (
+              <span className="match-snippet" title={file.search_match.snippet}>
+                {file.search_match.snippet}
+              </span>
+            )}
           </button>
           <span>{prettyDate(file.modified)}</span>
           <span>{formatBytes(file.size)}</span>

@@ -1,3 +1,4 @@
+import { findPassage, passageAnchors } from "./match-passage";
 import { useEffect, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, Loader2, Minus, Plus } from "lucide-react";
 import type {
@@ -8,7 +9,20 @@ import type {
 import workerUrl from "pdfjs-dist/legacy/build/pdf.worker.mjs?url";
 import { localDiagnostics } from "./local-diagnostics";
 
-export function PdfPreview({ url }: { url: string }) {
+export function PdfPreview({
+  url,
+  passage,
+}: {
+  url: string;
+  passage?: string;
+}) {
+  const [matchNotice, setMatchNotice] = useState("");
+  const [jump, setJump] = useState<{
+    page: number;
+    x: number;
+    y: number;
+  } | null>(null);
+  const manuallyPaged = useRef(false);
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null);
   const [page, setPage] = useState(1);
   const [zoom, setZoom] = useState(1);
@@ -104,6 +118,83 @@ export function PdfPreview({ url }: { url: string }) {
     };
   }, [url]);
   useEffect(() => {
+    if (!pdf || !passage) return;
+    let alive = true;
+    manuallyPaged.current = false;
+    setMatchNotice("Finding matching passage…");
+    void (async () => {
+      const anchors = passageAnchors(passage);
+      let bestPage = 0,
+        bestHits = 0;
+      let bestPoint: { page: number; x: number; y: number } | null = null;
+      for (
+        let pageNumber = 1;
+        pageNumber <= Math.min(pdf.numPages, 200);
+        pageNumber++
+      ) {
+        if (!alive || manuallyPaged.current) return;
+        const target = await pdf.getPage(pageNumber);
+        const content = await target.getTextContent();
+        if (!alive) return;
+        const text = content.items
+          .map((item) => ("str" in item ? item.str : ""))
+          .join(" ");
+        const point = (anchor: string) => {
+          const hit = findPassage(text, anchor);
+          if (!hit) return null;
+          let at = 0;
+          for (const item of content.items) {
+            const value = "str" in item ? item.str : "";
+            if (at + value.length > hit.start && "transform" in item)
+              return {
+                page: pageNumber,
+                x: item.transform[4],
+                y: item.transform[5],
+              };
+            at += value.length + 1;
+          }
+          return null;
+        };
+        if (manuallyPaged.current) return;
+        if (findPassage(text, anchors[0])) {
+          setJump(point(anchors[0]));
+          setPage(pageNumber);
+          setMatchNotice(`Matching passage · page ${pageNumber}`);
+          return;
+        }
+        const hits = anchors
+          .slice(1)
+          .filter((anchor) => findPassage(text, anchor)).length;
+        if (hits > bestHits) {
+          bestHits = hits;
+          bestPage = pageNumber;
+          bestPoint =
+            anchors
+              .slice(1)
+              .map(point)
+              .find((value) => value !== null) ?? null;
+        }
+      }
+      if (!alive || manuallyPaged.current) return;
+      if (bestPage) {
+        setJump(bestPoint);
+        setPage(bestPage);
+        setMatchNotice(`Passage continues around page ${bestPage}`);
+      } else
+        setMatchNotice(
+          "Passage shown above. Its PDF page could not be located automatically.",
+        );
+    })().catch(() => {
+      if (alive)
+        setMatchNotice(
+          "Passage shown above. Use page controls to browse this PDF.",
+        );
+    });
+    return () => {
+      alive = false;
+    };
+  }, [pdf, passage]);
+  useEffect(() => {
     if (!viewport.current) return;
     const observer = new ResizeObserver((entries) =>
       setWidth(entries[0].contentRect.width),
@@ -145,6 +236,13 @@ export function PdfPreview({ url }: { url: string }) {
           background: "white",
         });
         await task.promise;
+        if (jump?.page === page && viewport.current) {
+          const [, y] = view.convertToViewportPoint(jump.x, jump.y);
+          viewport.current.scrollTo({
+            top: Math.max(0, y - 80),
+            behavior: "auto",
+          });
+        }
         content.cleanup();
       })
       .catch((reason) => {
@@ -160,7 +258,7 @@ export function PdfPreview({ url }: { url: string }) {
       alive = false;
       task?.cancel();
     };
-  }, [pdf, page, zoom, width]);
+  }, [pdf, page, zoom, width, jump]);
   if (error)
     return (
       <div className="inline-preview-message" role="alert">
@@ -201,13 +299,22 @@ export function PdfPreview({ url }: { url: string }) {
     );
   return (
     <div className="pdf-preview">
+      {matchNotice && (
+        <p className="inline-preview-note" role="status">
+          {matchNotice}
+        </p>
+      )}
       <div className="inline-preview-toolbar">
         <div>
           <button
             className="icon-button"
             aria-label="Previous PDF page"
             disabled={page <= 1}
-            onClick={() => setPage((value) => value - 1)}
+            onClick={() => {
+              manuallyPaged.current = true;
+              setJump(null);
+              setPage((value) => value - 1);
+            }}
           >
             <ChevronLeft size={17} />
           </button>
@@ -218,7 +325,11 @@ export function PdfPreview({ url }: { url: string }) {
             className="icon-button"
             aria-label="Next PDF page"
             disabled={page >= pdf.numPages}
-            onClick={() => setPage((value) => value + 1)}
+            onClick={() => {
+              manuallyPaged.current = true;
+              setJump(null);
+              setPage((value) => value + 1);
+            }}
           >
             <ChevronRight size={17} />
           </button>

@@ -16,3 +16,7 @@ pub mod document_extract;
 pub mod document_index;
 pub mod update_policy;
 pub mod visibility;
+
+pub mod semantic;
+
+pub mod query_language;

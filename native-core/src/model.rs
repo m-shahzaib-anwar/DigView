@@ -68,7 +68,7 @@ pub struct Bootstrap {
     pub ocr: String,
     pub version: String,
 }
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Default, Clone)]
 #[serde(default)]
 pub struct Query {
     pub favourites: bool,

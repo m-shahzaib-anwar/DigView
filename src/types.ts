@@ -13,7 +13,15 @@ export interface HiddenItem {
   path: string;
   folder: boolean;
 }
+export interface MatchPassage {
+  snippet: string;
+  passage: string;
+  digest: string;
+  start: number;
+  end: number;
+}
 export interface FileRecord {
+  search_match?: MatchPassage;
   id: number;
   root_id: number;
   path: string;

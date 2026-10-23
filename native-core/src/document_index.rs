@@ -364,34 +364,32 @@ fn run_parser_at(
     Ok(result)
 }
 
+// OwnedHandle closes the job once and safely transfers ownership across worker threads.
 #[cfg(windows)]
-struct MemoryJob(windows::Win32::Foundation::HANDLE);
-#[cfg(windows)]
-impl Drop for MemoryJob {
-    fn drop(&mut self) {
-        unsafe {
-            let _ = windows::Win32::Foundation::CloseHandle(self.0);
-        }
-    }
-}
+pub struct MemoryJob { _handle: std::os::windows::io::OwnedHandle }
 #[cfg(windows)]
 fn memory_limit(child: &std::process::Child) -> Result<MemoryJob> {
-    use std::os::windows::io::AsRawHandle;
+    worker_job(child, 512 * 1024 * 1024)
+}
+#[cfg(windows)]
+pub fn worker_job(child: &std::process::Child, memory_bytes: usize) -> Result<MemoryJob> {
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
     use windows::Win32::{Foundation::HANDLE, System::JobObjects::*};
     unsafe {
-        let job = MemoryJob(CreateJobObjectW(None, None).map_err(|_| "worker_limit_unavailable")?);
+        let handle = CreateJobObjectW(None, None).map_err(|_| "worker_limit_unavailable")?;
+        let job = MemoryJob { _handle: OwnedHandle::from_raw_handle(handle.0) };
         let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
         limits.BasicLimitInformation.LimitFlags =
             JOB_OBJECT_LIMIT_PROCESS_MEMORY | JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        limits.ProcessMemoryLimit = 512 * 1024 * 1024;
+        limits.ProcessMemoryLimit = memory_bytes;
         SetInformationJobObject(
-            job.0,
+            handle,
             JobObjectExtendedLimitInformation,
             (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
             std::mem::size_of_val(&limits) as u32,
         )
         .map_err(|_| "worker_limit_unavailable")?;
-        AssignProcessToJobObject(job.0, HANDLE(child.as_raw_handle()))
+        AssignProcessToJobObject(handle, HANDLE(child.as_raw_handle()))
             .map_err(|_| "worker_limit_unavailable")?;
         Ok(job)
     }
